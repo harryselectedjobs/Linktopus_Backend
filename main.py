@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from routers.auth_router import router as auth_router
+from routers.share_post_router import router as share_post_router
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -13,6 +14,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(share_post_router)
 
 if __name__ == "__main__":
     import uvicorn
