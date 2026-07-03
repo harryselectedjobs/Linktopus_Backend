@@ -8,8 +8,8 @@ from middleware.auth_middleware import authenticate
 from repository.schedule_post_services import get_all_posts, get_posts_by_date, save_post
 
 router = APIRouter(
-    prefix="/auth",
-    tags=["SharePost"]
+    prefix="/share-post",
+tags=["SharePost"]
 )
 
 
