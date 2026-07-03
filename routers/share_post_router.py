@@ -31,7 +31,7 @@ def share_post_route(request: SharePostRequest, user=Depends(authenticate)):
 # -------------------------
 # Save Scheduled Post
 # -------------------------
-@router.post("/posts")
+@router.post("/schedule-posts")
 def save_post_route(
     request: SavePostRequest,
     user=Depends(authenticate)
