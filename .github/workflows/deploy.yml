@@ -29,6 +29,8 @@ jobs:
             JWT_SECRET=${{ secrets.JWT_SECRET }}
             ACCESS_TOKEN_EXPIRE_MINUTES=${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
             REFRESH_TOKEN_EXPIRE_DAYS=${{ secrets.REFRESH_TOKEN_EXPIRE_DAYS }}
+            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
             EOF
 
             git pull origin master

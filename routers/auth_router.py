@@ -7,7 +7,8 @@ from services.auth_service import *
 from middleware.auth_middleware import authenticate
 
 router = APIRouter(
-    prefix="/auth"
+    prefix="/auth",
+    tags=["Authentication"]
 )
 
 

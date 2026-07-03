@@ -7,3 +7,8 @@ class GeneratePostRequest(BaseModel):
 
 class SharePostRequest(BaseModel):
     post_text: str
+
+
+class SavePostRequest(BaseModel):
+    post_text: str
+    post_date: str
