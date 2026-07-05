@@ -1,66 +1,37 @@
-from datetime import datetime, timedelta
-import jwt
-
-# services/auth_service.py
-
 from utils.jwt_handler import (
     create_access_token,
     create_refresh_token,
     verify_token
 )
-
-users = {
-
-    "rahul@test.com": {
-
-        "id":1,
-        "email":"rahul@test.com",
-        "password":"123456"
-
-    }
-
-}
+from services.user_service import verify_user_password, get_user
 
 
-def login(email,password):
-
-    user = users.get(email)
+def login(email, password):
+    user = verify_user_password(email, password)
 
     if not user:
-        return {"error":"User not found"}
-
-    if user["password"] != password:
-        return {"error":"Wrong Password"}
+        return {"error": "Invalid email or password"}
 
     access = create_access_token(user)
-
     refresh = create_refresh_token(user)
 
     return {
-
-        "access_token":access,
-        "refresh_token":refresh
-
+        "access_token": access,
+        "refresh_token": refresh
     }
 
-def refresh(refresh_token):
 
+def refresh(refresh_token):
     payload = verify_token(refresh_token)
 
     if payload["type"] != "refresh":
+        return {"error": "Invalid Refresh Token"}
 
-        return {
+    user = get_user(payload["email"])
 
-            "error":"Invalid Refresh Token"
-
-        }
-
-    user = users[payload["email"]]
+    if not user:
+        return {"error": "User not found"}
 
     new_access = create_access_token(user)
 
-    return {
-
-        "access_token":new_access
-
-    }
+    return {"access_token": new_access}
