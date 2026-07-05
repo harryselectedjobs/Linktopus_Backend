@@ -6,8 +6,7 @@ import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from linkedIn_services.share_post.open_ai_services import generate_linkedin_posts
-from token_manager import get_valid_access_token
-
+from linkedIn_services.share_post.token_manager import get_valid_access_token
 # ============================================================
 # CONFIGURATION — fill these in
 # ============================================================
