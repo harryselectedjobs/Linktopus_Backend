@@ -1,6 +1,7 @@
 import boto3
 import os
 import bcrypt
+import uuid
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -32,6 +33,7 @@ def create_user(email: str, password: str):
 
     table.put_item(Item={
         "email": email,
+        "id": str(uuid.uuid4()),
         "password_hash": hashed_pw.decode("utf-8"),
         "created_at": datetime.utcnow().isoformat()
     })
