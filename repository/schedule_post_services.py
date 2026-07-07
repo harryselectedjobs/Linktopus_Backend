@@ -88,3 +88,46 @@ def get_posts_by_date(post_date: str):
         items.extend(response.get("Items", []))
 
     return items
+
+def delete_old_posts():
+    """
+    Deletes all posts with post_date before today.
+    Keeps today's and future posts.
+
+    Example:
+        If today is 2026-07-07, deletes all posts on or before 2026-07-06,
+        keeps posts on 2026-07-07 onward.
+    """
+
+    table = get_posts_table()
+
+    today = datetime.utcnow().date().isoformat()  # e.g. "2026-07-07"
+
+    response = table.scan(
+        FilterExpression="post_date < :today",
+        ExpressionAttributeValues={
+            ":today": today
+        }
+    )
+
+    items = response.get("Items", [])
+
+    while "LastEvaluatedKey" in response:
+        response = table.scan(
+            FilterExpression="post_date < :today",
+            ExpressionAttributeValues={
+                ":today": today
+            },
+            ExclusiveStartKey=response["LastEvaluatedKey"]
+        )
+        items.extend(response.get("Items", []))
+
+    deleted_count = 0
+    for item in items:
+        table.delete_item(Key={"post_id": item["post_id"]})
+        deleted_count += 1
+
+    return {
+        "deleted_count": deleted_count,
+        "cutoff_date": today
+    }

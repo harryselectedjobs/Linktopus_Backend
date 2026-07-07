@@ -5,7 +5,7 @@ from models.share_post_models import *
 
 
 from middleware.auth_middleware import authenticate
-from repository.schedule_post_services import get_all_posts, get_posts_by_date, save_post
+from repository.schedule_post_services import get_all_posts, get_posts_by_date, save_post, delete_old_posts
 
 router = APIRouter(
     prefix="/share-post",
@@ -61,3 +61,12 @@ def get_posts_by_date_route(
     user=Depends(authenticate)
 ):
     return get_posts_by_date(post_date)
+
+# -------------------------
+# Delete Old/History Posts
+# -------------------------
+@router.delete("/posts/history")
+def delete_old_posts_route(
+    user=Depends(authenticate)
+):
+    return delete_old_posts()
