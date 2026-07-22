@@ -1,0 +1,11 @@
+services:
+  backend:
+    build: .
+    container_name: linktopus_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - /home/ubuntu/linkedin_token.json:/app/linkedIn_services/share_post/linkedin_token.json
