@@ -1,8 +1,0 @@
-.git
-.github
-venv
-.venv
-__pycache__
-*.pyc
-.env
-linkedIn_services/share_post/linkedin_token.json
