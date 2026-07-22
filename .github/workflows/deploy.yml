@@ -33,6 +33,7 @@ jobs:
             AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
             AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
             UNIPILE_API_KEY=${{ secrets.UNIPILE_API_KEY }}
+            UNIPILE_CALENDAR_API_KEY=${{ secrets.UNIPILE_CALENDAR_API_KEY }}
             EOF
 
             git pull origin master
