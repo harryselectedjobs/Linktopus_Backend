@@ -8,7 +8,8 @@ from typing import List, Dict, Any, Optional
 
 from linkedIn_services.linkedin_recruiter_automation.unipile_apis import _build_response, _create_linkedin_job_raw, \
     _search_linkedin_recruiter_raw, _linkedin_user_action_raw, _create_linkedin_chat_raw, \
-    _get_linkedin_user_profile_raw, _invite_linkedin_user_raw, _safe_json
+    _get_linkedin_user_profile_raw, _invite_linkedin_user_raw, _safe_json, book_event
+from models.calendar_event import BookEventRequest, EventTime, Attendee
 from models.linkedin_chat import LinkedInChatRequest
 from models.linkedin_job import LinkedInJobRequest
 from fastapi import Response
@@ -178,3 +179,41 @@ async def run_linkedin_job_and_outreach_campaign(
         },
         status_code=200,
     )
+
+
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+
+async def book_one_hour_meeting(
+    date: str,
+    start_time: str,
+    email: str,
+    title: str,
+):
+
+    london_tz = ZoneInfo("Europe/London")
+
+    start_dt = datetime.strptime(
+        f"{date} {start_time}",
+        "%Y-%m-%d %H:%M"
+    ).replace(tzinfo=london_tz)
+
+    end_dt = start_dt + timedelta(hours=1)
+
+    payload = BookEventRequest(
+        start=EventTime(
+            date_time=start_dt.isoformat(),
+            time_zone="Europe/London",
+        ),
+        end=EventTime(
+            date_time=end_dt.isoformat(),
+            time_zone="Europe/London",
+        ),
+        title=title,
+        attendees=[
+            Attendee(email=email)
+        ],
+    )
+
+    return await book_event(payload)

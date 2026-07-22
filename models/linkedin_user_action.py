@@ -11,5 +11,5 @@ class LinkedInUserActionRequest(BaseModel):
 
 class LinkedInInviteRequest(BaseModel):
     provider_id: str
-    account_id: str = "Ryi4vdHxS8O4ChMtypDbLQ"
+    account_id: str = "D8lUBYotRuGOlA7cOQ4egQ"
     message: Optional[str] = None
