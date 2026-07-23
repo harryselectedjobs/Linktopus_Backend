@@ -140,8 +140,12 @@ async def run_linkedin_job_and_outreach_campaign(
         # STEP 4: send InMail
         inmail_sent = False
         try:
+            full_inmail_text = (
+                f"{inmailMessage}\n\n"
+                f"Schedule your meeting: https://linktopus.selected.jobs/calendar-booking"
+            )
             chat_resp = await _create_linkedin_chat_raw(
-                LinkedInChatRequest(account_id=account_id, text=inmailMessage, attendees_ids=user_id)
+                LinkedInChatRequest(account_id=account_id, text=full_inmail_text, attendees_ids=user_id)
             )
             candidate_result["inmail"] = {
                 "status_code": chat_resp.status_code,
