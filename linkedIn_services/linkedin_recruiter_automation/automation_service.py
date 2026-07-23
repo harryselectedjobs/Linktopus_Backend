@@ -63,7 +63,9 @@ async def run_linkedin_job_and_outreach_campaign(
             from `payload`, seniority and candidate search location passed in
             separately), paginating via `cursor` until every result is collected.
     STEP 3: add each candidate to the job's hiring pipeline.
-    STEP 4: send each candidate an InMail.
+    STEP 4: send each candidate an InMail, then log a meeting scheduling
+            record for them (title = recruiter project name, email pulled
+            from their LinkedIn profile).
     STEP 5: look up each candidate's provider_id and send a connection invite.
 
     A failure on one candidate's steps doesn't stop the rest of the batch —
@@ -136,6 +138,7 @@ async def run_linkedin_job_and_outreach_campaign(
             candidate_result["add_to_pipeline"] = {"error": str(exc)}
 
         # STEP 4: send InMail
+        inmail_sent = False
         try:
             chat_resp = await _create_linkedin_chat_raw(
                 LinkedInChatRequest(account_id=account_id, text=inmailMessage, attendees_ids=user_id)
@@ -144,13 +147,41 @@ async def run_linkedin_job_and_outreach_campaign(
                 "status_code": chat_resp.status_code,
                 "body": _safe_json(chat_resp),
             }
+            inmail_sent = chat_resp.status_code < 400
         except Exception as exc:
             candidate_result["inmail"] = {"error": str(exc)}
 
-        # STEP 5: get provider_id, then invite
+        # Fetch profile once — used for meeting record (email) and invite (provider_id)
+        profile_data: Optional[dict] = None
         try:
             profile_resp = await _get_linkedin_user_profile_raw(public_identifier, account_id)
-            provider_id = (_safe_json(profile_resp) or {}).get("provider_id")
+            profile_data = _safe_json(profile_resp)
+        except Exception as exc:
+            candidate_result["profile_lookup_error"] = str(exc)
+
+        # After InMail is sent, log a meeting scheduling record for this candidate
+        if inmail_sent:
+            try:
+                candidate_email = None
+                if profile_data:
+                    emails = (profile_data.get("contact_info") or {}).get("emails") or []
+                    candidate_email = emails[0] if emails else None
+
+                if candidate_email:
+                    meeting_payload = {
+                        "title": payload.recruiter.project.name,
+                        "attendees": [{"email": candidate_email}],
+                    }
+                    meeting_record = await asyncio.to_thread(add_meeting_record, meeting_payload)
+                    candidate_result["meeting_record"] = meeting_record
+                else:
+                    candidate_result["meeting_record"] = {"error": "no email found on candidate profile"}
+            except Exception as exc:
+                candidate_result["meeting_record"] = {"error": str(exc)}
+
+        # STEP 5: invite using provider_id from the profile fetched above
+        try:
+            provider_id = profile_data.get("provider_id") if profile_data else None
 
             if provider_id:
                 invite_resp = await _invite_linkedin_user_raw(
