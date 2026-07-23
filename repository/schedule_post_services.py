@@ -11,7 +11,7 @@ def get_posts_table():
     return dynamodb.Table(TABLE_NAME)
 
 
-def save_post(post_text: str, post_date: str):
+def save_post(post_text: str, post_date: str,account_type:str):
     """
     Save a new LinkedIn post.
 
@@ -27,6 +27,7 @@ def save_post(post_text: str, post_date: str):
     item = {
         "post_id": str(uuid.uuid4()),
         "post_text": post_text,
+        "accountType":account_type,
         "post_date": post_date,
         "created_date": datetime.utcnow().isoformat()
     }

@@ -39,7 +39,9 @@ def save_post_route(
 ):
     return save_post(
         post_text=request.post_text,
-        post_date=request.post_date
+        post_date=request.post_date,
+        account_type=request.account_type
+
     )
 
 

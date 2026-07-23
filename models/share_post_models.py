@@ -12,6 +12,7 @@ class SharePostRequest(BaseModel):
 class SavePostRequest(BaseModel):
     post_text: str
     post_date: str
+    account_type:str
 
 
 class LinkedInPagePostRequest(BaseModel):
