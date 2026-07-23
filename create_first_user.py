@@ -1,6 +1,6 @@
 from services.user_service import create_user
 
-# result = create_user("rahul@test.com", "Eightmay2000")
+# result = create_user("harry@selected.jobs", "godisgreat")
 # print(result)
 
 
