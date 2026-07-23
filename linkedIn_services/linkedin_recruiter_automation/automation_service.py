@@ -16,6 +16,7 @@ from fastapi import Response
 
 from models.linkedin_search import LinkedInSearchRequest, SeniorityFilter, RoleFilter, LocationFilter
 from models.linkedin_user_action import LinkedInUserActionRequest, LinkedInInviteRequest
+from repository.schedule_calendar_services import mark_meeting_as_booked
 
 
 async def create_linkedin_job(payload: LinkedInJobRequest) -> Response:
@@ -191,29 +192,22 @@ async def book_one_hour_meeting(
     email: str,
     title: str,
 ):
-
     london_tz = ZoneInfo("Europe/London")
 
-    start_dt = datetime.strptime(
-        f"{date} {start_time}",
-        "%Y-%m-%d %H:%M"
-    ).replace(tzinfo=london_tz)
-
+    start_dt = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M").replace(tzinfo=london_tz)
     end_dt = start_dt + timedelta(hours=1)
 
     payload = BookEventRequest(
-        start=EventTime(
-            date_time=start_dt.isoformat(),
-            time_zone="Europe/London",
-        ),
-        end=EventTime(
-            date_time=end_dt.isoformat(),
-            time_zone="Europe/London",
-        ),
+        start=EventTime(date_time=start_dt.isoformat(), time_zone="Europe/London"),
+        end=EventTime(date_time=end_dt.isoformat(), time_zone="Europe/London"),
         title=title,
-        attendees=[
-            Attendee(email=email)
-        ],
+        attendees=[Attendee(email=email)],
     )
 
-    return await book_event(payload)
+    result = await book_event(payload)
+
+    # only mark it booked if the calendar event actually succeeded
+    if getattr(result, "status_code", 200) < 400:
+        mark_meeting_as_booked(email)
+
+    return result

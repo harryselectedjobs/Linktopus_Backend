@@ -39,6 +39,42 @@ def add_meeting_record(payload: dict, expiry_hours: int = 72):
 
     return item
 
+def mark_meeting_as_booked(email: str) -> dict | None:
+    """
+    Finds the pending meeting record for this email and marks it as
+    used/scheduled, so future check_booking_availability calls report
+    ALREADY_BOOKED.
+    """
+    dynamodb = _get_dynamodb_client()
+    table = dynamodb.Table(TABLE_NAME)
+
+    email = email.strip().lower()
+
+    items = []
+    response = table.scan()
+    items.extend(response.get("Items", []))
+
+    while "LastEvaluatedKey" in response:
+        response = table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
+        items.extend(response.get("Items", []))
+
+    for item in items:
+        payload = item.get("payload", {})
+        attendees = payload.get("attendees", [])
+
+        for attendee in attendees:
+            if attendee.get("email", "").strip().lower() == email:
+                table.update_item(
+                    Key={"meeting_id": item["meeting_id"]},
+                    UpdateExpression="SET used = :used, scheduled = :scheduled",
+                    ExpressionAttributeValues={":used": True, ":scheduled": True},
+                )
+                item["used"] = True
+                item["scheduled"] = True
+                return item
+
+    return None  # no matching pending record found for this email
+
 
 def check_booking_availability(email: str) -> BookingAvailability:
     """
