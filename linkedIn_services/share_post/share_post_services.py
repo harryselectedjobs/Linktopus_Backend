@@ -46,6 +46,12 @@ The user may provide:
 - Event summaries
 - Or any combination of the above.
 
+LENGTH REQUIREMENT (READ CAREFULLY)
+
+- If the user's input specifies a word count, character count, or length (e.g. "2000 words", "short post", "under 100 words", "long-form"), you MUST follow it as closely as possible for EVERY variation. Treat this as a hard constraint, not a suggestion.
+- If no length is specified, write naturally in the standard LinkedIn range of roughly 150–300 words per post — long enough to deliver real value, short enough to stay scannable.
+- Do not silently shrink posts to save space. If the user asked for 2000 words, all four variations should each be close to 2000 words, even though that makes the output long.
+
 INSTRUCTIONS
 
 - Carefully understand the user's intent.
@@ -62,7 +68,7 @@ INSTRUCTIONS
 
 VARIATIONS
 
-Generate FOUR DISTINCT LinkedIn posts.
+Generate FOUR DISTINCT LinkedIn posts, each meeting the LENGTH REQUIREMENT above.
 
 Each variation should:
 - Have a different opening hook.

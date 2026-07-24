@@ -26,7 +26,7 @@ def generate_linkedin_posts(prompt: str, max_retries: int = 3) -> dict:
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.9,
-        "max_tokens": 2500,
+        "max_tokens": 16000,
         "response_format": {"type": "json_object"}
     }
 
