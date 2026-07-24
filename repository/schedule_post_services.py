@@ -10,6 +10,8 @@ def get_posts_table():
     dynamodb = _get_dynamodb_client()
     return dynamodb.Table(TABLE_NAME)
 
+def normalize_word(word: str) -> str:
+    return word.strip().capitalize()
 
 def save_post(post_text: str, post_date: str,account_type:str):
     """
@@ -27,7 +29,7 @@ def save_post(post_text: str, post_date: str,account_type:str):
     item = {
         "post_id": str(uuid.uuid4()),
         "post_text": post_text,
-        "accountType":account_type,
+        "accountType":normalize_word(account_type),
         "post_date": post_date,
         "created_date": datetime.utcnow().isoformat()
     }
