@@ -1,3 +1,4 @@
+import asyncio
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any, Optional
 
@@ -16,7 +17,7 @@ from fastapi import Response
 
 from models.linkedin_search import LinkedInSearchRequest, SeniorityFilter, RoleFilter, LocationFilter
 from models.linkedin_user_action import LinkedInUserActionRequest, LinkedInInviteRequest
-from repository.schedule_calendar_services import mark_meeting_as_booked
+from repository.schedule_calendar_services import mark_meeting_as_booked, add_meeting_record
 
 
 async def create_linkedin_job(payload: LinkedInJobRequest) -> Response:
