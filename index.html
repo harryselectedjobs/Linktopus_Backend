@@ -1,0 +1,382 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LinkedIn Outreach Pipeline</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f7fb;
+            padding: 40px;
+            color: #222;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        h2 {
+            margin-bottom: 25px;
+            font-size: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 22px;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        /* Keyword row */
+        .keyword-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .keyword-input {
+            flex: 1;
+            padding: 12px 14px;
+            border: 1px solid #d5d9e2;
+            border-radius: 7px;
+            font-size: 15px;
+            outline: none;
+        }
+
+        .keyword-input:focus,
+        textarea:focus {
+            border-color: #4f46e5;
+        }
+
+        .add-keyword-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 7px;
+            background: #4f46e5;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            line-height: 40px;
+        }
+
+        .add-keyword-btn:hover {
+            background: #4338ca;
+        }
+
+        .remove-keyword-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 7px;
+            background: #ef4444;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        .remove-keyword-btn:hover {
+            background: #dc2626;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            resize: vertical;
+            padding: 12px 14px;
+            border: 1px solid #d5d9e2;
+            border-radius: 7px;
+            font-size: 15px;
+            font-family: Arial, sans-serif;
+            outline: none;
+        }
+
+        .run-btn {
+            width: 100%;
+            padding: 14px;
+            border: none;
+            border-radius: 7px;
+            background: #111827;
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .run-btn:hover {
+            background: #000;
+        }
+
+        .run-btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .hint {
+            margin-top: 7px;
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        #response {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f3f4f6;
+            border-radius: 7px;
+            display: none;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <h2>Run Outreach Pipeline</h2>
+
+    <!-- Keywords -->
+    <div class="form-group">
+
+        <label>Keywords</label>
+
+        <div id="keywords-container">
+
+            <!-- First keyword -->
+            <div class="keyword-row">
+                <input
+                    type="text"
+                    class="keyword-input"
+                    placeholder="Enter keyword e.g. Python"
+                >
+
+                <button
+                    type="button"
+                    class="add-keyword-btn"
+                    onclick="addKeyword()"
+                >
+                    +
+                </button>
+            </div>
+
+        </div>
+
+        <div class="hint">
+            Add multiple keywords. They will be combined using AND.
+        </div>
+
+    </div>
+
+
+    <!-- InMail Message -->
+    <div class="form-group">
+
+        <label for="inmail_message">
+            InMail Message
+        </label>
+
+        <textarea
+            id="inmail_message"
+            placeholder="Enter your InMail message..."
+        ></textarea>
+
+    </div>
+
+
+    <!-- Connection Message -->
+    <div class="form-group">
+
+        <label for="connection_message">
+            Connection Message
+        </label>
+
+        <textarea
+            id="connection_message"
+            placeholder="Enter your connection message..."
+        ></textarea>
+
+    </div>
+
+
+    <!-- Run Pipeline -->
+    <button
+        type="button"
+        class="run-btn"
+        id="runPipelineBtn"
+        onclick="runPipeline()"
+    >
+        Run Pipeline
+    </button>
+
+
+    <div id="response"></div>
+
+</div>
+
+
+<script>
+
+    // Add a new keyword input
+    function addKeyword() {
+
+        const container = document.getElementById("keywords-container");
+
+        const row = document.createElement("div");
+        row.className = "keyword-row";
+
+        row.innerHTML = `
+            <input
+                type="text"
+                class="keyword-input"
+                placeholder="Enter keyword e.g. Java"
+            >
+
+            <button
+                type="button"
+                class="remove-keyword-btn"
+                onclick="removeKeyword(this)"
+            >
+                ×
+            </button>
+        `;
+
+        container.appendChild(row);
+    }
+
+
+    // Remove keyword input
+    function removeKeyword(button) {
+
+        button.parentElement.remove();
+    }
+
+
+    // Run API
+    async function runPipeline() {
+
+        const button = document.getElementById("runPipelineBtn");
+
+        // Get all keyword inputs
+        const keywordInputs = document.querySelectorAll(".keyword-input");
+
+        const keywords = [];
+
+        keywordInputs.forEach(input => {
+
+            const value = input.value.trim();
+
+            if (value) {
+                keywords.push(value);
+            }
+
+        });
+
+
+        // Validate keywords
+        if (keywords.length === 0) {
+            alert("Please enter at least one keyword.");
+            return;
+        }
+
+
+        // Get messages
+        const inmailMessage =
+            document.getElementById("inmail_message").value.trim();
+
+        const connectionMessage =
+            document.getElementById("connection_message").value.trim();
+
+
+        // Convert:
+        // Python + Java
+        //
+        // into:
+        // Python AND Java
+
+        const keywordString = keywords.join(" AND ");
+
+
+        // API payload
+        const payload = {
+            keywords: keywordString,
+            inmail_message: inmailMessage,
+            connection_message: connectionMessage
+        };
+
+
+        console.log("Sending payload:", payload);
+
+
+        try {
+
+            button.disabled = true;
+            button.innerText = "Running...";
+
+
+            const response = await fetch(
+                "http://localhost:8000/search-ppl",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+
+                    body: JSON.stringify(payload)
+                }
+            );
+
+
+            const data = await response.json();
+
+
+            console.log("API Response:", data);
+
+
+            // Show response
+            const responseBox =
+                document.getElementById("response");
+
+            responseBox.style.display = "block";
+
+            responseBox.textContent =
+                JSON.stringify(data, null, 2);
+
+
+        } catch (error) {
+
+            console.error(error);
+
+            alert("Something went wrong while calling the API.");
+
+        } finally {
+
+            button.disabled = false;
+            button.innerText = "Run Pipeline";
+        }
+    }
+
+</script>
+
+</body>
+</html>
+```
