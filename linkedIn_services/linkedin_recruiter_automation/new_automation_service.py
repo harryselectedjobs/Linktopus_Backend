@@ -6,6 +6,7 @@ from linkedIn_services.linkedin_recruiter_automation.unipile_apis import _invite
 from models.linkedin_chat import LinkedInChatRequest
 from models.linkedin_user_action import LinkedInInviteRequest
 from repository.new_automation_pipeline import save_candidates, get_top_candidates, mark_outreach_sent
+from repository.schedule_calendar_services import  add_meeting_record
 
 UNIPILE_BASE_URL = "https://api40.unipile.com:17060"
 UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
@@ -135,7 +136,7 @@ async def run_outreach_pipeline(
     save_candidates(project_id, candidates)
 
     # Change limit=50 if you actually want top 50
-    top_candidates = get_top_candidates(project_id, limit=50)
+    top_candidates = get_top_candidates(project_id, limit=1)
 
     full_inmail_text = (
         f"{inmail_message}\n\n"
