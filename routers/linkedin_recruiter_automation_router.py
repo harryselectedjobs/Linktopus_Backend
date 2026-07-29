@@ -7,6 +7,7 @@ from linkedIn_services.linkedin_recruiter_automation.automation_service import r
 from linkedIn_services.linkedin_recruiter_automation.new_automation_service import search_linkedin_people, \
     run_outreach_pipeline
 from models.linkedin_campaign import LinkedInCampaignRequest
+from repository.new_automation_pipeline import get_all_projects, get_project_details
 
 router = APIRouter(
     prefix="/automation",
@@ -65,3 +66,35 @@ async def trigger_outreach_pipeline(payload: OutreachPipelineRequest):
         project_id=project_id,
         message="Outreach pipeline completed successfully",
     )
+
+# ── Project listing / details ───────────────────────────────────────────────
+
+class ProjectSummary(BaseModel):
+    project_id: str
+    project_name: str = ""
+    candidate_count: int
+    first_created_at: str | None = None
+
+
+class ProjectDetailsResponse(BaseModel):
+    project_id: str
+    candidate_count: int
+    candidates: list[dict]
+
+
+@router.get("/projects", response_model=list[ProjectSummary])
+async def list_projects():
+    try:
+        return get_all_projects()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list projects: {str(e)}")
+
+
+@router.get("/projects/{project_id}", response_model=ProjectDetailsResponse)
+async def get_project(project_id: str):
+    try:
+        return get_project_details(project_id)
+    except HTTPException:
+        raise  # preserve the 404 raised inside get_project_details
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch project: {str(e)}")

@@ -16,19 +16,6 @@ router = APIRouter()
 DEFAULT_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
 
 
-# ── DynamoDB client / table setup ───────────────────────────────────────────
-
-# def _get_dynamodb_client():
-#     if os.getenv("AWS_ACCESS_KEY_ID"):
-#         return boto3.resource(
-#             "dynamodb",
-#             region_name=os.getenv("AWS_REGION", "ap-south-1"),
-#             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-#             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-#         )
-#     return boto3.resource("dynamodb", region_name=os.getenv("AWS_REGION", "ap-south-1"))
-
-
 def create_project_candidates_table(table_name: str = "jobPipelineTable"):
     dynamodb = _get_dynamodb_client()
 
@@ -60,12 +47,7 @@ def get_table(table_name: str = "jobPipelineTable"):
 
 # ── Table operations ─────────────────────────────────────────────────────────
 
-def save_candidates(project_id: str, candidates: list, table_name: str = "jobPipelineTable"):
-    """
-    candidates: the list from search_result["items"] — matches Unipile's
-    LinkedinSearch "PEOPLE" object shape. Saves ALL of them (up to ~200),
-    with outreach flags initialized to False.
-    """
+def save_candidates(project_id: str, candidates: list, project_name: str, table_name: str = "jobPipelineTable"):
     table = get_table(table_name)
 
     with table.batch_writer() as batch:
@@ -78,6 +60,7 @@ def save_candidates(project_id: str, candidates: list, table_name: str = "jobPip
             batch.put_item(Item={
                 "project_id": project_id,
                 "candidate_id": candidate_id,
+                "project_name": project_name,
                 "full_name": candidate.get("name", ""),
                 "headline": candidate.get("headline", ""),
                 "location": candidate.get("location", ""),
@@ -127,3 +110,58 @@ def mark_outreach_sent(project_id: str, candidate_id: str, inmail: bool = False,
     )
 
 
+def get_all_projects(table_name: str = "jobPipelineTable"):
+    table = get_table(table_name)
+
+    projects = {}
+    scan_kwargs = {"ProjectionExpression": "project_id, project_name, created_at"}
+
+    while True:
+        response = table.scan(**scan_kwargs)
+        for item in response.get("Items", []):
+            pid = item["project_id"]
+            if pid not in projects:
+                projects[pid] = {
+                    "project_id": pid,
+                    "project_name": item.get("project_name", ""),
+                    "candidate_count": 0,
+                    "first_created_at": item.get("created_at"),
+                }
+            projects[pid]["candidate_count"] += 1
+            if item.get("created_at") and item["created_at"] < projects[pid]["first_created_at"]:
+                projects[pid]["first_created_at"] = item["created_at"]
+
+        if "LastEvaluatedKey" in response:
+            scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        else:
+            break
+
+    return list(projects.values())
+
+def get_project_details(project_id: str, table_name: str = "jobPipelineTable"):
+    """
+    Returns ALL candidates for a given project_id (no limit), handling
+    pagination via LastEvaluatedKey since a project can have up to ~200+ items.
+    """
+    table = get_table(table_name)
+
+    items = []
+    query_kwargs = {"KeyConditionExpression": Key("project_id").eq(project_id)}
+
+    while True:
+        response = table.query(**query_kwargs)
+        items.extend(response.get("Items", []))
+
+        if "LastEvaluatedKey" in response:
+            query_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        else:
+            break
+
+    if not items:
+        raise HTTPException(status_code=404, detail=f"No project found with id '{project_id}'")
+
+    return {
+        "project_id": project_id,
+        "candidate_count": len(items),
+        "candidates": items,
+    }

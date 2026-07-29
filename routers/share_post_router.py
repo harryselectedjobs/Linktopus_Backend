@@ -16,7 +16,6 @@ tags=["SharePost"]
 
 @router.post("/generate")
 def generate_post_route(request: GeneratePostRequest, user=Depends(authenticate)):
-
     return get_LinkedIn_Posts(
         request.user_input
     )

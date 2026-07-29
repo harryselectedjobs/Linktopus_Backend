@@ -133,10 +133,10 @@ async def run_outreach_pipeline(
     # ---------------------------------------------------------
     # STEP 2: Save candidates
     # ---------------------------------------------------------
-    save_candidates(project_id, candidates)
+    save_candidates(project_id, candidates,project_name)
 
     # Change limit=50 if you actually want top 50
-    top_candidates = get_top_candidates(project_id, limit=1)
+    top_candidates = get_top_candidates(project_id, limit=50)
 
     full_inmail_text = (
         f"{inmail_message}\n\n"
