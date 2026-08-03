@@ -33,11 +33,13 @@ DEFAULT_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
 # ── Router ────────────────────────────────────────────────────────────────
 
 class OutreachPipelineRequest(BaseModel):
-    project_name:str
+    project_name: str
     keyword: str
     inmail_message: str
     connection_message: str | None = None
     limit: int = 100
+    location: list[dict] | None = None
+    seniority: dict | None = None
 
 
 class OutreachPipelineResponse(BaseModel):
@@ -57,7 +59,9 @@ async def trigger_outreach_pipeline(payload: OutreachPipelineRequest):
             keyword=payload.keyword,
             inmail_message=payload.inmail_message,
             connection_message=payload.connection_message,
-            limit=payload.limit
+            limit=payload.limit,
+            location=payload.location,
+            seniority=payload.seniority,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Outreach pipeline failed: {str(e)}")

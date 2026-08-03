@@ -15,7 +15,9 @@ UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
 async def search_linkedin_people(
     account_id: str,
     keyword: str,
-    limit: int = 1
+    limit: int = 1,
+    location: list[dict] | None = None,
+    seniority: dict | None = None
 ):
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
 
@@ -49,6 +51,14 @@ async def search_linkedin_people(
         ],
         "locale": "english"
     }
+
+    # Optional: location filter, e.g. [{"id": 12356565}]
+    if location:
+        payload["location"] = location
+
+    # Optional: seniority filter, e.g. {"include": ["owner", "vp"], "exclude": ["unpaid"]}
+    if seniority:
+        payload["seniority"] = seniority
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -95,9 +105,12 @@ async def run_outreach_pipeline(
     inmail_message: str,
     connection_message: str = None,
     limit: int = 100,
+    location: list[dict] | None = None,
+    seniority: dict | None = None,
 ):
     """
-    1. Searches LinkedIn people (up to `limit`)
+    1. Searches LinkedIn people (up to `limit`, optionally filtered by
+       `location` / `seniority`)
     2. Saves all candidates to DynamoDB
     3. Processes the top candidates
     4. Sends InMail
@@ -113,6 +126,8 @@ async def run_outreach_pipeline(
         account_id=account_id,
         keyword=keyword,
         limit=limit,
+        location=location,
+        seniority=seniority,
     )
 
     if not search_result:
