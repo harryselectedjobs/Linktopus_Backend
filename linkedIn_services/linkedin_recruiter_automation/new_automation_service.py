@@ -15,7 +15,7 @@ UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
 async def search_linkedin_people(
     account_id: str,
     keyword: str,
-    limit: int = 1,
+    limit: int = 100,
     location: list[dict] | None = None,
     seniority: dict | None = None
 ):
@@ -52,13 +52,23 @@ async def search_linkedin_people(
         "locale": "english"
     }
 
-    # Optional: location filter, e.g. [{"id": 12356565}]
+    # location: recruiter API expects [{"id": "<digits as string>"}, ...]
+    # NOTE: id MUST be a string matching ^\d+$, not an integer —
+    # sending it as a number causes a 400 "Expected union value" error.
     if location:
-        payload["location"] = location
+        payload["location"] = [
+            {"id": str(loc["id"])} for loc in location if loc.get("id")
+        ]
 
-    # Optional: seniority filter, e.g. {"include": ["owner", "vp"], "exclude": ["unpaid"]}
+    # seniority: only include non-empty include/exclude lists
     if seniority:
-        payload["seniority"] = seniority
+        cleaned_seniority = {}
+        if seniority.get("include"):
+            cleaned_seniority["include"] = seniority["include"]
+        if seniority.get("exclude"):
+            cleaned_seniority["exclude"] = seniority["exclude"]
+        if cleaned_seniority:
+            payload["seniority"] = cleaned_seniority
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
