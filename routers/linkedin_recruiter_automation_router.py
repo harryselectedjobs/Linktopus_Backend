@@ -35,9 +35,16 @@ DEFAULT_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
 class LocationFilter(BaseModel):
     id: int
 
+
+class CompanyFilter(BaseModel):
+    id: int
+    priority: str = "CAN_HAVE"
+
+
 class SeniorityFilter(BaseModel):
     include: list[str] | None = None
     exclude: list[str] | None = None
+
 
 class OutreachPipelineRequest(BaseModel):
     project_name: str
@@ -45,17 +52,21 @@ class OutreachPipelineRequest(BaseModel):
     inmail_message: str
     connection_message: str | None = None
     limit: int = 100
+
     location: list[LocationFilter] | None = None
     seniority: SeniorityFilter | None = None
+
+    past_company: list[CompanyFilter] | None = None
+    current_company: list[CompanyFilter] | None = None
 
 
 class OutreachPipelineResponse(BaseModel):
     project_id: str
     message: str
 
-
 @router.post("/outreach/run", response_model=OutreachPipelineResponse)
 async def trigger_outreach_pipeline(payload: OutreachPipelineRequest):
+
     project_id = str(uuid.uuid4())
 
     try:
@@ -67,11 +78,34 @@ async def trigger_outreach_pipeline(payload: OutreachPipelineRequest):
             inmail_message=payload.inmail_message,
             connection_message=payload.connection_message,
             limit=payload.limit,
-            location=[loc.model_dump() for loc in payload.location] if payload.location else None,
-            seniority=payload.seniority.model_dump() if payload.seniority else None,
+
+            location=[
+                loc.model_dump()
+                for loc in payload.location
+            ] if payload.location else None,
+
+            seniority=(
+                payload.seniority.model_dump()
+                if payload.seniority
+                else None
+            ),
+
+            past_company=[
+                company.model_dump()
+                for company in payload.past_company
+            ] if payload.past_company else None,
+
+            current_company=[
+                company.model_dump()
+                for company in payload.current_company
+            ] if payload.current_company else None,
         )
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Outreach pipeline failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Outreach pipeline failed: {str(e)}"
+        )
 
     return OutreachPipelineResponse(
         project_id=project_id,

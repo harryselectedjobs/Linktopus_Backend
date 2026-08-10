@@ -7,11 +7,10 @@ from linkedIn_services.linkedin_recruiter_automation.unipile_apis import _invite
 from models.linkedin_chat import LinkedInChatRequest
 from models.linkedin_user_action import LinkedInInviteRequest
 from repository.new_automation_pipeline import save_candidates, get_top_candidates, mark_outreach_sent
-from repository.schedule_calendar_services import  add_meeting_record
+from repository.schedule_calendar_services import add_meeting_record
 
 UNIPILE_BASE_URL = "https://api40.unipile.com:17060"
 UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
-
 
 import json
 import re
@@ -36,135 +35,292 @@ def _loosen_keywords(keyword: str, logic: str) -> str:
     return keyword
 
 
+
+def _format_company_filters(
+    companies: list[dict] | None
+) -> list[dict]:
+
+    if not companies:
+        return []
+
+    return [
+        {
+            "id": str(company["id"]),
+            "priority": company.get("priority", "CAN_HAVE")
+        }
+        for company in companies
+        if company.get("id")
+    ]
+
+
+
 async def search_linkedin_people(
-    account_id: str,
-    keyword: str,
-    limit: int = 1,
-    location: list[dict] | None = None,
-    seniority: dict | None = None,
-    role_priority: str = "CAN_HAVE",
-    skills_priority: str = "CAN_HAVE",
-    keyword_logic: str = "OR",
+        account_id: str,
+        keyword: str,
+        limit: int = 1,
+        location: list[dict] | None = None,
+        seniority: dict | None = None,
+        past_company: list[dict] | None = None,
+        current_company: list[dict] | None = None,
+        role_priority: str = "CAN_HAVE",
+        skills_priority: str = "CAN_HAVE",
+        keyword_logic: str = "AND",
 ):
     """
-    keyword_logic:
-      "OR"  (default) - loosens an AND-chained keyword string into an
-            OR-chain, so a candidate matching ANY keyword/phrase
-            qualifies. Prevents 0-result searches caused by requiring
-            every phrase to be present at once.
-      "AND" - leaves the keyword string exactly as passed in (strict,
-            candidate must match everything — use for narrow,
-            high-precision searches).
+    Search LinkedIn Recruiter people.
 
-    role_priority / skills_priority default to "CAN_HAVE" so these
-    filters influence ranking rather than hard-excluding candidates
-    who don't perfectly match every phrase.
+    Supports:
+    - keywords
+    - location
+    - seniority
+    - past company
+    - current company
     """
+
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
 
     params = {
         "limit": limit,
-        "account_id": account_id
+        "account_id": account_id,
     }
 
     headers = {
         "X-API-KEY": UNIPILE_API_KEY,
         "accept": "application/json",
-        "content-type": "application/json"
+        "content-type": "application/json",
     }
 
-    effective_keyword = _loosen_keywords(keyword, keyword_logic)
+    effective_keyword = _loosen_keywords(
+        keyword,
+        keyword_logic
+    )
 
     payload = {
         "api": "recruiter",
         "category": "people",
-        "role": [
-            {
-                "is_selection": True,
-                "keywords": effective_keyword,
-                "priority": role_priority
-            }
-        ],
+
         "keywords": effective_keyword,
-        "skills": [
-            {
-                "keywords": effective_keyword,
-                "priority": skills_priority
-            }
-        ],
-        "locale": "english"
+
+        "locale": "english",
     }
 
-    # location: recruiter API expects [{"id": "<digits as string>"}, ...]
+    # ---------------------------------------------------------
+    # ROLE
+    # ---------------------------------------------------------
+
+    payload["role"] = [
+        {
+            "is_selection": True,
+            "keywords": effective_keyword,
+            "priority": role_priority,
+        }
+    ]
+
+    # ---------------------------------------------------------
+    # SKILLS
+    # ---------------------------------------------------------
+
+    payload["skills"] = [
+        {
+            "keywords": effective_keyword,
+            "priority": skills_priority,
+        }
+    ]
+
+    # ---------------------------------------------------------
+    # LOCATION
+    # ---------------------------------------------------------
+
     if location:
-        payload["location"] = [
-            {"id": str(loc["id"])} for loc in location if loc.get("id")
+
+        formatted_location = [
+            {
+                "id": str(loc["id"])
+            }
+            for loc in location
+            if loc.get("id")
         ]
 
-    # seniority: only include non-empty include/exclude lists
+        if formatted_location:
+            payload["location"] = formatted_location
+
+    # ---------------------------------------------------------
+    # SENIORITY
+    # ---------------------------------------------------------
+
     if seniority:
+
         cleaned_seniority = {}
+
         if seniority.get("include"):
-            cleaned_seniority["include"] = seniority["include"]
+            cleaned_seniority["include"] = (
+                seniority["include"]
+            )
+
         if seniority.get("exclude"):
-            cleaned_seniority["exclude"] = seniority["exclude"]
+            cleaned_seniority["exclude"] = (
+                seniority["exclude"]
+            )
+
         if cleaned_seniority:
             payload["seniority"] = cleaned_seniority
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+    # ---------------------------------------------------------
+    # PAST COMPANY
+    # ---------------------------------------------------------
 
-            print("Sending request...")
+    formatted_past_company = _format_company_filters(
+        past_company
+    )
+
+    if formatted_past_company:
+        payload["past_company"] = formatted_past_company
+
+    # ---------------------------------------------------------
+    # CURRENT COMPANY
+    # ---------------------------------------------------------
+
+    formatted_current_company = _format_company_filters(
+        current_company
+    )
+
+    if formatted_current_company:
+        payload["current_company"] = formatted_current_company
+
+    # ---------------------------------------------------------
+    # REQUEST
+    # ---------------------------------------------------------
+
+    try:
+
+        async with httpx.AsyncClient(
+                timeout=120.0
+        ) as client:
+
+            print("Sending LinkedIn Recruiter request...")
+
             print("URL:", url)
             print("Params:", params)
-            print("Payload:", payload)
+            print(
+                "Payload:",
+                json.dumps(
+                    payload,
+                    indent=2
+                )
+            )
 
             response = await client.post(
                 url,
                 params=params,
                 headers=headers,
-                json=payload
+                json=payload,
             )
 
-            print("Status:", response.status_code)
-            print("Response:", response.text)
+            print(
+                "Status:",
+                response.status_code
+            )
+
+            print(
+                "Response:",
+                response.text
+            )
 
             response.raise_for_status()
 
             return response.json()
 
     except httpx.ReadTimeout:
-        print("❌ Unipile request timed out after 120 seconds.")
+
+        print(
+            "❌ Unipile request timed out "
+            "after 120 seconds."
+        )
+
         return None
 
     except httpx.HTTPStatusError as e:
-        print("❌ HTTP Error:", e.response.status_code)
+
+        print(
+            "❌ HTTP Error:",
+            e.response.status_code
+        )
 
         try:
+
             error_body = e.response.json()
 
-            with open("unipile_error.json", "w", encoding="utf-8") as f:
-                json.dump(error_body, f, indent=2)
-            print("❌ Full error written to unipile_error.json")
+            with open(
+                    "unipile_error.json",
+                    "w",
+                    encoding="utf-8"
+            ) as f:
 
-            detail = error_body.get("detail", "")
-            idx = detail.find('"title":"Recruiter - People"')
+                json.dump(
+                    error_body,
+                    f,
+                    indent=2
+                )
+
+            print(
+                "❌ Full error written "
+                "to unipile_error.json"
+            )
+
+            detail = error_body.get(
+                "detail",
+                ""
+            )
+
+            idx = detail.find(
+                '"title":"Recruiter - People"'
+            )
+
             if idx != -1:
-                print("---- Recruiter - People schema ----")
-                print(detail[max(0, idx - 5):idx + 4000])
+
+                print(
+                    "---- Recruiter - People schema ----"
+                )
+
+                print(
+                    detail[
+                    max(0, idx - 5):
+                    idx + 4000
+                    ]
+                )
+
             else:
-                print("⚠️ Could not locate 'Recruiter - People' section in detail.")
+
+                print(
+                    "⚠️ Could not locate "
+                    "'Recruiter - People' section."
+                )
+
                 print(detail[:2000])
 
         except Exception as parse_exc:
-            print("⚠️ Could not parse error body:", parse_exc)
-            print("Raw response:", e.response.text)
+
+            print(
+                "⚠️ Could not parse error body:",
+                parse_exc
+            )
+
+            print(
+                "Raw response:",
+                e.response.text
+            )
 
         return None
 
     except httpx.RequestError as e:
-        print("❌ Request Error:", str(e))
+
+        print(
+            "❌ Request Error:",
+            str(e)
+        )
+
         return None
+
 
 # ── Outreach pipeline ───────────────────────────────────────────────────────
 
@@ -178,6 +334,8 @@ async def run_outreach_pipeline(
     limit: int = 100,
     location: list[dict] | None = None,
     seniority: dict | None = None,
+    past_company: list[dict] | None = None,
+    current_company: list[dict] | None = None,
 ):
     """
     1. Searches LinkedIn people (up to `limit`, optionally filtered by
@@ -199,6 +357,8 @@ async def run_outreach_pipeline(
         limit=limit,
         location=location,
         seniority=seniority,
+        past_company=past_company,
+        current_company=current_company,
     )
 
     if not search_result:
