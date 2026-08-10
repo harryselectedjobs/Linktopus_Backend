@@ -1,5 +1,6 @@
 import asyncio
 import httpx
+import json
 
 from linkedIn_services.linkedin_recruiter_automation.unipile_apis import _invite_linkedin_user_raw, \
     _create_linkedin_chat_raw, _get_linkedin_user_profile_raw, _safe_json
@@ -12,36 +13,52 @@ UNIPILE_BASE_URL = "https://api40.unipile.com:17060"
 UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
 
 
+import json
+import re
+
+
+def _loosen_keywords(keyword: str, logic: str) -> str:
+    """
+    LinkedIn's top-level `keywords` field is always a hard filter —
+    there's no priority setting for it like role/skills have. If the
+    incoming string is a long AND-chain of multi-word phrases
+    (e.g. "GTM Revenue Operations Leader AND Go To Market AND ..."),
+    a candidate must match ALL phrases, which is extremely restrictive
+    and can easily produce 0 results.
+
+    logic="OR" rewrites " AND " -> " OR " so a candidate matching ANY
+    one phrase qualifies instead of requiring all of them.
+    logic="AND" leaves the string untouched (strict matching).
+    """
+    if logic == "OR":
+        # Case-insensitive replace of the literal " AND " connector
+        return re.sub(r"\s+AND\s+", " OR ", keyword, flags=re.IGNORECASE)
+    return keyword
+
+
 async def search_linkedin_people(
-        account_id: str,
-        keyword: str,
-        limit: int = 1,
-        location: list[dict] | None = None,
-        seniority: dict | None = None,
-        role_priority: str = "CAN_HAVE",
-        skills_priority: str = "CAN_HAVE",
+    account_id: str,
+    keyword: str,
+    limit: int = 1,
+    location: list[dict] | None = None,
+    seniority: dict | None = None,
+    role_priority: str = "CAN_HAVE",
+    skills_priority: str = "CAN_HAVE",
+    keyword_logic: str = "OR",
 ):
     """
-    NOTE on result volume:
-    Unipile applies `keywords`, `role.keywords`, and `skills.keywords`
-    as INDEPENDENT filters — a candidate must satisfy all three
-    simultaneously if they're each set to MUST_HAVE. Reusing the same
-    long AND-chain string in all three multiplies restrictiveness and
-    can shrink results down to just a handful of candidates (or 1).
+    keyword_logic:
+      "OR"  (default) - loosens an AND-chained keyword string into an
+            OR-chain, so a candidate matching ANY keyword/phrase
+            qualifies. Prevents 0-result searches caused by requiring
+            every phrase to be present at once.
+      "AND" - leaves the keyword string exactly as passed in (strict,
+            candidate must match everything — use for narrow,
+            high-precision searches).
 
-    To broaden results without changing your calling code:
-      - `role` and `skills` now default to priority "CAN_HAVE" instead
-        of "MUST_HAVE". CAN_HAVE lets Unipile use these as ranking
-        signals rather than hard filters, so candidates who match the
-        top-level `keywords` but aren't a perfect role/skill match
-        still show up (just ranked lower).
-      - Only the top-level `keywords` field remains a hard filter by
-        default, since that's the field actually meant to narrow the
-        search.
-
-    If you want role/skills to stay strict filters for a specific
-    search, pass role_priority="MUST_HAVE" and/or
-    skills_priority="MUST_HAVE" explicitly.
+    role_priority / skills_priority default to "CAN_HAVE" so these
+    filters influence ranking rather than hard-excluding candidates
+    who don't perfectly match every phrase.
     """
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
 
@@ -56,20 +73,22 @@ async def search_linkedin_people(
         "content-type": "application/json"
     }
 
+    effective_keyword = _loosen_keywords(keyword, keyword_logic)
+
     payload = {
         "api": "recruiter",
         "category": "people",
         "role": [
             {
                 "is_selection": True,
-                "keywords": keyword,
+                "keywords": effective_keyword,
                 "priority": role_priority
             }
         ],
-        "keywords": keyword,
+        "keywords": effective_keyword,
         "skills": [
             {
-                "keywords": keyword,
+                "keywords": effective_keyword,
                 "priority": skills_priority
             }
         ],
