@@ -56,24 +56,32 @@ def _format_company_filters(
 
 async def search_linkedin_people(
         account_id: str,
-        job_title: str,
-        skill_ids: list[str] | None = None,   # resolved skill IDs, not raw text
+        keyword: str,
         limit: int = 1,
         location: list[dict] | None = None,
         seniority: dict | None = None,
         past_company: list[dict] | None = None,
         current_company: list[dict] | None = None,
-        role_priority: str = "MUST_HAVE",
-        skills_priority: str = "NICE_TO_HAVE",
-        secondary_title: str | None = None,   # optional 2nd role entry
+        role_priority: str = "CAN_HAVE",
+        skills_priority: str = "CAN_HAVE",
+        keyword_logic: str = "AND",
 ):
     """
     Search LinkedIn Recruiter people.
 
-    NOTE: LinkedIn Recruiter's `role` field accepts a MAX of 2 entries.
-    `skills` requires resolved numeric IDs — it does NOT accept free-text
-    keywords. Resolve skill names to IDs via /linkedin/search/parameters
-    (type=SKILL) BEFORE calling this function.
+    Supports:
+    - keywords
+    - location
+    - seniority
+    - past company
+    - current company
+
+    NOTE: The `role` filter uses only the 2ND phrase from the
+    AND-chained `keyword` string (e.g. for
+    "Python SQL Backend Developer AND Python AND SQL AND REST APIs
+    AND Backend Development AND Database Optimization", role gets
+    just "Python"). `keywords` and `skills` still use the full
+    effective keyword string.
     """
 
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
@@ -89,53 +97,68 @@ async def search_linkedin_people(
         "content-type": "application/json",
     }
 
+    effective_keyword = _loosen_keywords(
+        keyword,
+        keyword_logic
+    )
+
+    # ---------------------------------------------------------
+    # Extract the 2nd AND-chained phrase for the role filter.
+    # Splits on " AND " (case-insensitive), strips whitespace,
+    # and falls back to the full keyword string if there aren't
+    # at least 2 phrases.
+    # ---------------------------------------------------------
+    keyword_parts = re.split(r"\s+AND\s+", keyword.strip(), flags=re.IGNORECASE)
+    keyword_parts = [p.strip() for p in keyword_parts if p.strip()]
+
+    role_keyword = keyword_parts[1] if len(keyword_parts) >= 2 else effective_keyword
+
     payload = {
         "api": "recruiter",
         "category": "people",
+
+        "keywords": effective_keyword,
+
         "locale": "english",
     }
 
     # ---------------------------------------------------------
-    # ROLE — max 2 entries, short keywords, no AND-chaining
+    # ROLE — uses only the 2nd keyword phrase
     # ---------------------------------------------------------
 
-    role_entries = [
+    payload["role"] = [
         {
-            "keywords": job_title,
+            "is_selection": True,
+            "keywords": role_keyword,
             "priority": role_priority,
-            "scope": "CURRENT_OR_PAST",
         }
     ]
 
-    if secondary_title:
-        role_entries.append({
-            "keywords": secondary_title,
-            "priority": "NICE_TO_HAVE",
-            "scope": "CURRENT_OR_PAST",
-        })
-
-    payload["role"] = role_entries[:2]  # hard cap, just in case
-
     # ---------------------------------------------------------
-    # SKILLS — resolved IDs only
+    # SKILLS
     # ---------------------------------------------------------
 
-    if skill_ids:
-        payload["skills"] = [
-            {"id": sid, "priority": skills_priority}
-            for sid in skill_ids
-        ]
+    payload["skills"] = [
+        {
+            "keywords": effective_keyword,
+            "priority": skills_priority,
+        }
+    ]
 
     # ---------------------------------------------------------
     # LOCATION
     # ---------------------------------------------------------
 
     if location:
+
         formatted_location = [
-            {"id": str(loc["id"])}
+            {
+                "id": str(loc["id"])
+            }
             for loc in location
             if loc.get("id")
         ]
+
         if formatted_location:
             payload["location"] = formatted_location
 
@@ -144,23 +167,41 @@ async def search_linkedin_people(
     # ---------------------------------------------------------
 
     if seniority:
+
         cleaned_seniority = {}
+
         if seniority.get("include"):
-            cleaned_seniority["include"] = seniority["include"]
+            cleaned_seniority["include"] = (
+                seniority["include"]
+            )
+
         if seniority.get("exclude"):
-            cleaned_seniority["exclude"] = seniority["exclude"]
+            cleaned_seniority["exclude"] = (
+                seniority["exclude"]
+            )
+
         if cleaned_seniority:
             payload["seniority"] = cleaned_seniority
 
     # ---------------------------------------------------------
-    # PAST / CURRENT COMPANY
+    # PAST COMPANY
     # ---------------------------------------------------------
 
-    formatted_past_company = _format_company_filters(past_company)
+    formatted_past_company = _format_company_filters(
+        past_company
+    )
+
     if formatted_past_company:
         payload["past_company"] = formatted_past_company
 
-    formatted_current_company = _format_company_filters(current_company)
+    # ---------------------------------------------------------
+    # CURRENT COMPANY
+    # ---------------------------------------------------------
+
+    formatted_current_company = _format_company_filters(
+        current_company
+    )
+
     if formatted_current_company:
         payload["current_company"] = formatted_current_company
 
@@ -169,38 +210,133 @@ async def search_linkedin_people(
     # ---------------------------------------------------------
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+
+        async with httpx.AsyncClient(
+                timeout=120.0
+        ) as client:
+
             print("Sending LinkedIn Recruiter request...")
+
             print("URL:", url)
             print("Params:", params)
-            print("Payload:", json.dumps(payload, indent=2))
+            print(
+                "Payload:",
+                json.dumps(
+                    payload,
+                    indent=2
+                )
+            )
 
-            response = await client.post(url, params=params, headers=headers, json=payload)
+            response = await client.post(
+                url,
+                params=params,
+                headers=headers,
+                json=payload,
+            )
 
-            print("Status:", response.status_code)
-            print("Response:", response.text)
+            print(
+                "Status:",
+                response.status_code
+            )
+
+            print(
+                "Response:",
+                response.text
+            )
 
             response.raise_for_status()
+
             return response.json()
 
     except httpx.ReadTimeout:
-        print("❌ Unipile request timed out after 120 seconds.")
+
+        print(
+            "❌ Unipile request timed out "
+            "after 120 seconds."
+        )
+
         return None
 
     except httpx.HTTPStatusError as e:
-        print("❌ HTTP Error:", e.response.status_code)
+
+        print(
+            "❌ HTTP Error:",
+            e.response.status_code
+        )
+
         try:
+
             error_body = e.response.json()
-            with open("unipile_error.json", "w", encoding="utf-8") as f:
-                json.dump(error_body, f, indent=2)
-            print("❌ Full error written to unipile_error.json")
+
+            with open(
+                    "unipile_error.json",
+                    "w",
+                    encoding="utf-8"
+            ) as f:
+
+                json.dump(
+                    error_body,
+                    f,
+                    indent=2
+                )
+
+            print(
+                "❌ Full error written "
+                "to unipile_error.json"
+            )
+
+            detail = error_body.get(
+                "detail",
+                ""
+            )
+
+            idx = detail.find(
+                '"title":"Recruiter - People"'
+            )
+
+            if idx != -1:
+
+                print(
+                    "---- Recruiter - People schema ----"
+                )
+
+                print(
+                    detail[
+                    max(0, idx - 5):
+                    idx + 4000
+                    ]
+                )
+
+            else:
+
+                print(
+                    "⚠️ Could not locate "
+                    "'Recruiter - People' section."
+                )
+
+                print(detail[:2000])
+
         except Exception as parse_exc:
-            print("⚠️ Could not parse error body:", parse_exc)
-            print("Raw response:", e.response.text)
+
+            print(
+                "⚠️ Could not parse error body:",
+                parse_exc
+            )
+
+            print(
+                "Raw response:",
+                e.response.text
+            )
+
         return None
 
     except httpx.RequestError as e:
-        print("❌ Request Error:", str(e))
+
+        print(
+            "❌ Request Error:",
+            str(e)
+        )
+
         return None
 
 
