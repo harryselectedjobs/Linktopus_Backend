@@ -13,12 +13,36 @@ UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
 
 
 async def search_linkedin_people(
-    account_id: str,
-    keyword: str,
-    limit: int = 100,
-    location: list[dict] | None = None,
-    seniority: dict | None = None
+        account_id: str,
+        keyword: str,
+        limit: int = 1,
+        location: list[dict] | None = None,
+        seniority: dict | None = None,
+        role_priority: str = "CAN_HAVE",
+        skills_priority: str = "CAN_HAVE",
 ):
+    """
+    NOTE on result volume:
+    Unipile applies `keywords`, `role.keywords`, and `skills.keywords`
+    as INDEPENDENT filters — a candidate must satisfy all three
+    simultaneously if they're each set to MUST_HAVE. Reusing the same
+    long AND-chain string in all three multiplies restrictiveness and
+    can shrink results down to just a handful of candidates (or 1).
+
+    To broaden results without changing your calling code:
+      - `role` and `skills` now default to priority "CAN_HAVE" instead
+        of "MUST_HAVE". CAN_HAVE lets Unipile use these as ranking
+        signals rather than hard filters, so candidates who match the
+        top-level `keywords` but aren't a perfect role/skill match
+        still show up (just ranked lower).
+      - Only the top-level `keywords` field remains a hard filter by
+        default, since that's the field actually meant to narrow the
+        search.
+
+    If you want role/skills to stay strict filters for a specific
+    search, pass role_priority="MUST_HAVE" and/or
+    skills_priority="MUST_HAVE" explicitly.
+    """
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
 
     params = {
@@ -32,34 +56,27 @@ async def search_linkedin_people(
         "content-type": "application/json"
     }
 
-    role_keywords = " AND ".join(
-        part.strip()
-        for part in keyword.split(" AND ")[:3]
-    )
-
     payload = {
         "api": "recruiter",
         "category": "people",
         "role": [
             {
                 "is_selection": True,
-                "keywords": role_keywords,
-                "priority": "MUST_HAVE"
+                "keywords": keyword,
+                "priority": role_priority
             }
         ],
         "keywords": keyword,
         "skills": [
             {
                 "keywords": keyword,
-                "priority": "MUST_HAVE"
+                "priority": skills_priority
             }
         ],
         "locale": "english"
     }
 
     # location: recruiter API expects [{"id": "<digits as string>"}, ...]
-    # NOTE: id MUST be a string matching ^\d+$, not an integer —
-    # sending it as a number causes a 400 "Expected union value" error.
     if location:
         payload["location"] = [
             {"id": str(loc["id"])} for loc in location if loc.get("id")
@@ -103,7 +120,27 @@ async def search_linkedin_people(
 
     except httpx.HTTPStatusError as e:
         print("❌ HTTP Error:", e.response.status_code)
-        print("Response:", e.response.text)
+
+        try:
+            error_body = e.response.json()
+
+            with open("unipile_error.json", "w", encoding="utf-8") as f:
+                json.dump(error_body, f, indent=2)
+            print("❌ Full error written to unipile_error.json")
+
+            detail = error_body.get("detail", "")
+            idx = detail.find('"title":"Recruiter - People"')
+            if idx != -1:
+                print("---- Recruiter - People schema ----")
+                print(detail[max(0, idx - 5):idx + 4000])
+            else:
+                print("⚠️ Could not locate 'Recruiter - People' section in detail.")
+                print(detail[:2000])
+
+        except Exception as parse_exc:
+            print("⚠️ Could not parse error body:", parse_exc)
+            print("Raw response:", e.response.text)
+
         return None
 
     except httpx.RequestError as e:
