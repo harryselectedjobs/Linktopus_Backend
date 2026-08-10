@@ -32,13 +32,18 @@ async def search_linkedin_people(
         "content-type": "application/json"
     }
 
+    role_keywords = " AND ".join(
+        part.strip()
+        for part in keyword.split(" AND ")[:3]
+    )
+
     payload = {
         "api": "recruiter",
         "category": "people",
         "role": [
             {
                 "is_selection": True,
-                "keywords": keyword,
+                "keywords": role_keywords,
                 "priority": "MUST_HAVE"
             }
         ],
