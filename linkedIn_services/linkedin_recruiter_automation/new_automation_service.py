@@ -167,7 +167,7 @@ async def run_outreach_pipeline(
     save_candidates(project_id, candidates, project_name)
 
     # Change limit=50 if you actually want top 50
-    top_candidates = get_top_candidates(project_id, limit=1)
+    top_candidates = get_top_candidates(project_id, limit=50)
 
     # ---------------------------------------------------------
     # STEP 3: Process candidates
