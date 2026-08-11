@@ -68,8 +68,10 @@ FINAL company_list:
 4. "seniority_level": pick exactly ONE value that best matches the seniority
    indicated in the job description (usually stated in the title or in
    phrases like "this VP will..." or "reports into the SVP..."). Choose only
-   from this exact list, and return the value exactly as written:
-   ["Owner", "Partner", "CXO", "VP", "Director", "Manager", "Senior", "Entry", "Training", "Unpaid"]
+   from this exact list: ["Owner", "Partner", "CXO", "VP", "Director",
+   "Manager", "Senior", "Entry", "Training", "Unpaid"]. Return the chosen
+   value entirely in lowercase (e.g. "vp", "director", "entry") — do not
+   return it in the original casing shown above.
 
 5. A professional LinkedIn InMail message (80-120 words).
 6. A LinkedIn connection note (maximum 300 characters).
