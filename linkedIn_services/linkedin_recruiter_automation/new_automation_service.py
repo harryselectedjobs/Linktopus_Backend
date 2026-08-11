@@ -64,7 +64,8 @@ async def search_linkedin_people(
         current_company: list[dict] | None = None,
         role_priority: str = "CAN_HAVE",
         skills_priority: str = "CAN_HAVE",
-        keyword_logic: str = "AND",
+        keyword_logic: str = "OR",
+        max_keyword_phrases: int = 2,
 ):
     """
     Search LinkedIn Recruiter people.
@@ -76,12 +77,21 @@ async def search_linkedin_people(
     - past company
     - current company
 
-    NOTE: The `role` filter uses only the 2ND phrase from the
-    AND-chained `keyword` string (e.g. for
-    "Python SQL Backend Developer AND Python AND SQL AND REST APIs
-    AND Backend Development AND Database Optimization", role gets
-    just "Python"). `keywords` and `skills` still use the full
-    effective keyword string.
+    NOTE on keyword handling — the incoming `keyword` string is split
+    on " AND " into individual phrases, then distributed as follows
+    (using the example "Python SQL Backend Developer AND Python AND
+    SQL AND REST APIs AND Backend Development AND Database
+    Optimization", with default max_keyword_phrases=2):
+
+    - `role`: only the 2ND phrase (e.g. "Python"). Unchanged from
+      before.
+    - `keywords`: the FIRST `max_keyword_phrases` phrases, joined with
+      `keyword_logic` (e.g. "Python SQL Backend Developer OR Python").
+    - `skills`: the NEXT `max_keyword_phrases` phrases after that
+      (e.g. "SQL OR REST APIs") — a genuinely different slice from
+      `keywords`, rather than duplicating the same value. If there
+      aren't enough phrases left for a distinct skills slice, it
+      falls back to the same value as `keywords`.
     """
 
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
@@ -97,20 +107,36 @@ async def search_linkedin_people(
         "content-type": "application/json",
     }
 
-    effective_keyword = _loosen_keywords(
-        keyword,
-        keyword_logic
-    )
-
     # ---------------------------------------------------------
-    # Extract the 2nd AND-chained phrase for the role filter.
-    # Splits on " AND " (case-insensitive), strips whitespace,
-    # and falls back to the full keyword string if there aren't
-    # at least 2 phrases.
+    # Split the raw keyword string into its AND-chained phrases.
     # ---------------------------------------------------------
     keyword_parts = re.split(r"\s+AND\s+", keyword.strip(), flags=re.IGNORECASE)
     keyword_parts = [p.strip() for p in keyword_parts if p.strip()]
 
+    connector = " OR " if keyword_logic == "OR" else " AND "
+
+    # ---------------------------------------------------------
+    # keywords: first `max_keyword_phrases` phrases
+    # ---------------------------------------------------------
+    keywords_slice = keyword_parts[:max_keyword_phrases]
+    effective_keyword = (
+        connector.join(keywords_slice) if keywords_slice else keyword.strip()
+    )
+
+    # ---------------------------------------------------------
+    # skills: the NEXT `max_keyword_phrases` phrases (a different
+    # slice from keywords). Falls back to effective_keyword only if
+    # there aren't enough remaining phrases to be distinct.
+    # ---------------------------------------------------------
+    skills_slice = keyword_parts[max_keyword_phrases: max_keyword_phrases * 2]
+    effective_skills = (
+        connector.join(skills_slice) if skills_slice else effective_keyword
+    )
+
+    # ---------------------------------------------------------
+    # role: unchanged — uses only the 2nd AND-chained phrase,
+    # falling back to effective_keyword if fewer than 2 phrases.
+    # ---------------------------------------------------------
     role_keyword = keyword_parts[1] if len(keyword_parts) >= 2 else effective_keyword
 
     payload = {
@@ -123,7 +149,7 @@ async def search_linkedin_people(
     }
 
     # ---------------------------------------------------------
-    # ROLE — uses only the 2nd keyword phrase
+    # ROLE — uses only the 2nd keyword phrase (unchanged)
     # ---------------------------------------------------------
 
     payload["role"] = [
@@ -135,12 +161,12 @@ async def search_linkedin_people(
     ]
 
     # ---------------------------------------------------------
-    # SKILLS
+    # SKILLS — uses a different slice than keywords
     # ---------------------------------------------------------
 
     payload["skills"] = [
         {
-            "keywords": effective_keyword,
+            "keywords": effective_skills,
             "priority": skills_priority,
         }
     ]
