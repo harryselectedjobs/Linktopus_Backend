@@ -12,6 +12,12 @@ from repository.schedule_calendar_services import add_meeting_record
 UNIPILE_BASE_URL = "https://api40.unipile.com:17060"
 UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
 
+# NEW: recruiter *project* endpoints (create project, etc.) live on the
+# main management host, not the per-account DSN host above — Unipile
+# routes these differently, so this needs its own base URL / key.
+UNIPILE_PROJECTS_BASE_URL = "https://api.unipile.com/v2"
+UNIPILE_PROJECTS_API_KEY = "bKcyr7TB.app_01kznge4wxesmap4y2wk9qnqpv.PN4y1XB4VB1blVpdmZ+94MEM0llrJ5hGbV7MPgrjlr0="
+
 import json
 import re
 
@@ -366,6 +372,114 @@ async def search_linkedin_people(
         return None
 
 
+# ── Unipile recruiter project helpers (NEW) ─────────────────────────────────
+
+async def create_unipile_recruiter_project(
+    account_id: str,
+    project_name: str,
+    visibility: str = "PRIVATE",
+) -> dict | None:
+    """
+    POST /v2/{account_id}/linkedin/recruiter/projects
+
+    Creates a Unipile recruiter project named `project_name` and returns
+    the parsed JSON response (e.g. {"object": "ProjectCreated",
+    "project_id": "1539201617"}), or None on failure.
+    """
+
+    url = f"{UNIPILE_PROJECTS_BASE_URL}/{account_id}/linkedin/recruiter/projects"
+
+    headers = {
+        "X-API-KEY": UNIPILE_PROJECTS_API_KEY,
+        "accept": "application/json",
+        "content-type": "application/json",
+    }
+
+    payload = {
+        "visibility": visibility,
+        "name": project_name,
+    }
+
+    try:
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+
+            response = await client.post(
+                url,
+                headers=headers,
+                json=payload,
+            )
+
+            if response.status_code in (200, 201):
+                return response.json()
+
+            print(
+                f"❌ Unipile project creation failed: "
+                f"{response.status_code} {response.text}"
+            )
+
+            return None
+
+    except httpx.RequestError as e:
+        print(f"❌ Unipile project creation request error: {e}")
+        return None
+
+
+async def add_candidate_to_unipile_pipeline(
+    account_id: str,
+    hiring_project_id: str,
+    public_identifier: str,
+    stage: str = "UNCONTACTED",
+) -> bool:
+    """
+    POST /api/v1/linkedin/user/{public_identifier}
+    action=addCandidateToPipeline
+
+    Adds a candidate to the given Unipile recruiter project's pipeline
+    at `stage` ("UNCONTACTED" or "CONTACTED"). Returns True on success.
+    """
+
+    url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/user/{public_identifier}"
+
+    headers = {
+        "X-API-KEY": UNIPILE_API_KEY,
+        "accept": "application/json",
+        "content-type": "application/json",
+    }
+
+    payload = {
+        "api": "recruiter",
+        "action": "addCandidateToPipeline",
+        "account_id": account_id,
+        "hiring_project_id": hiring_project_id,
+        "stage": stage,
+    }
+
+    try:
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+
+            response = await client.post(
+                url,
+                headers=headers,
+                json=payload,
+            )
+
+            if response.status_code in (200, 201):
+                return True
+
+            print(
+                f"❌ Add-to-pipeline failed for {public_identifier}: "
+                f"{response.status_code} {response.text}"
+            )
+
+            return False
+
+    except httpx.RequestError as e:
+        print(f"❌ Add-to-pipeline request error for {public_identifier}: {e}")
+        return False
+
+
 # ── Outreach pipeline ───────────────────────────────────────────────────────
 
 async def run_outreach_pipeline(
@@ -385,11 +499,13 @@ async def run_outreach_pipeline(
     1. Searches LinkedIn people (up to `limit`, optionally filtered by
        `location` / `seniority`)
     2. Saves all candidates to DynamoDB
+    3. Creates a Unipile recruiter project named `project_name` and adds
+       every saved candidate to that project's pipeline
 
     NOTE: InMail sending, connection invites, and meeting record
-    creation are TEMPORARILY DISABLED. This currently only searches
-    and saves candidates — no outreach is sent. Re-enable by
-    uncommenting STEP 3 below.
+    creation are TEMPORARILY DISABLED. This currently only searches,
+    saves candidates, and syncs them into the Unipile pipeline — no
+    outreach is sent. Re-enable by uncommenting STEP 3 below.
     """
 
     # ---------------------------------------------------------
@@ -424,6 +540,65 @@ async def run_outreach_pipeline(
     # STEP 2: Save candidates
     # ---------------------------------------------------------
     save_candidates(project_id, candidates, project_name)
+
+    # ---------------------------------------------------------
+    # NEW: Create Unipile recruiter project + sync candidates into
+    # its pipeline (project name = `project_name`)
+    # ---------------------------------------------------------
+    unipile_project_id = None
+
+    project_result = await create_unipile_recruiter_project(
+        account_id=account_id,
+        project_name=project_name,
+    )
+
+    if project_result:
+        unipile_project_id = project_result.get("project_id")
+        print(
+            f"✅ Unipile recruiter project created: "
+            f"'{project_name}' (project_id={unipile_project_id})"
+        )
+
+    if unipile_project_id:
+
+        added_count = 0
+
+        for candidate in candidates:
+
+            full_name = candidate.get("full_name")
+            public_identifier = candidate.get("public_identifier")
+
+            if not public_identifier:
+                print(
+                    f"⚠️ Skipping pipeline add for {full_name} — "
+                    f"no public_identifier found"
+                )
+                continue
+
+            # Always UNCONTACTED for now since InMail/connection sending
+            # (STEP 3) is disabled. Once STEP 3 is re-enabled, pass
+            # stage="CONTACTED" from inside that block for candidates
+            # whose inmail_success is True.
+            success = await add_candidate_to_unipile_pipeline(
+                account_id=account_id,
+                hiring_project_id=unipile_project_id,
+                public_identifier=public_identifier,
+                stage="UNCONTACTED",
+            )
+
+            if success:
+                added_count += 1
+                print(f"✅ Added {full_name} to Unipile pipeline")
+
+        print(
+            f"ℹ️ {added_count}/{len(candidates)} candidates added to "
+            f"Unipile pipeline (project_id={unipile_project_id})"
+        )
+
+    else:
+        print(
+            "⚠️ Skipping pipeline sync — no Unipile project_id available."
+        )
 
     print(
         f"✅ Outreach pipeline complete for project {project_id} "
