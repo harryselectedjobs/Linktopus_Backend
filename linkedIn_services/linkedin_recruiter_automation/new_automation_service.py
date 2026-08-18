@@ -428,18 +428,24 @@ async def create_unipile_recruiter_project(
 async def add_candidate_to_unipile_pipeline(
     account_id: str,
     hiring_project_id: str,
-    public_identifier: str,
+    candidate_linkedin_id: str,
     stage: str = "UNCONTACTED",
 ) -> bool:
     """
-    POST /api/v1/linkedin/user/{public_identifier}
+    POST /api/v1/linkedin/user/{candidate_linkedin_id}
     action=addCandidateToPipeline
+
+    `candidate_linkedin_id` must be the search result's `id` field
+    (e.g. "AEMAADcP9wMBk3-WhxeDyf73fJ4fqzLd1_A_q94") — NOT
+    `public_identifier` (the vanity URL slug, e.g.
+    "rahul-kumar-gupta-62b462219"). The two look similar in shape but
+    the pipeline endpoint only accepts the former.
 
     Adds a candidate to the given Unipile recruiter project's pipeline
     at `stage` ("UNCONTACTED" or "CONTACTED"). Returns True on success.
     """
 
-    url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/user/{public_identifier}"
+    url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/user/{candidate_linkedin_id}"
 
     headers = {
         "X-API-KEY": UNIPILE_API_KEY,
@@ -469,14 +475,14 @@ async def add_candidate_to_unipile_pipeline(
                 return True
 
             print(
-                f"❌ Add-to-pipeline failed for {public_identifier}: "
+                f"❌ Add-to-pipeline failed for {candidate_linkedin_id}: "
                 f"{response.status_code} {response.text}"
             )
 
             return False
 
     except httpx.RequestError as e:
-        print(f"❌ Add-to-pipeline request error for {public_identifier}: {e}")
+        print(f"❌ Add-to-pipeline request error for {candidate_linkedin_id}: {e}")
         return False
 
 
@@ -575,13 +581,13 @@ async def run_outreach_pipeline(
 
         for candidate in candidates:
 
-            full_name = candidate.get("full_name")
-            public_identifier = candidate.get("public_identifier")
+            full_name = candidate.get("full_name") or candidate.get("name")
+            candidate_linkedin_id = candidate.get("id")
 
-            if not public_identifier:
+            if not candidate_linkedin_id:
                 print(
                     f"⚠️ Skipping pipeline add for {full_name} — "
-                    f"no public_identifier found"
+                    f"no id found"
                 )
                 continue
 
@@ -592,7 +598,7 @@ async def run_outreach_pipeline(
             success = await add_candidate_to_unipile_pipeline(
                 account_id=account_id,
                 hiring_project_id=unipile_project_id,
-                public_identifier=public_identifier,
+                candidate_linkedin_id=candidate_linkedin_id,
                 stage="UNCONTACTED",
             )
 
