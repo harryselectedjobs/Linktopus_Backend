@@ -494,6 +494,7 @@ async def run_outreach_pipeline(
     seniority: dict | None = None,
     past_company: list[dict] | None = None,
     current_company: list[dict] | None = None,
+    projects_account_id: str = "acc_01m09sdddhfetrdm9tzcbqncv1",
 ):
     """
     1. Searches LinkedIn people (up to `limit`, optionally filtered by
@@ -506,6 +507,15 @@ async def run_outreach_pipeline(
     creation are TEMPORARILY DISABLED. This currently only searches,
     saves candidates, and syncs them into the Unipile pipeline — no
     outreach is sent. Re-enable by uncommenting STEP 3 below.
+
+    Unipile setup note — two separate Unipile accounts are in play here:
+    - `account_id`: the DSN/action account (search, addCandidateToPipeline)
+      — same one already used for search_linkedin_people, on
+      UNIPILE_BASE_URL / UNIPILE_API_KEY.
+    - `projects_account_id`: the account recruiter *projects* are created
+      under, on UNIPILE_PROJECTS_BASE_URL / UNIPILE_PROJECTS_API_KEY.
+      Defaulted to the value from your curl example — pass it explicitly
+      if that's not actually a fixed/shared value in your setup.
     """
 
     # ---------------------------------------------------------
@@ -548,7 +558,7 @@ async def run_outreach_pipeline(
     unipile_project_id = None
 
     project_result = await create_unipile_recruiter_project(
-        account_id=account_id,
+        account_id=projects_account_id,
         project_name=project_name,
     )
 
