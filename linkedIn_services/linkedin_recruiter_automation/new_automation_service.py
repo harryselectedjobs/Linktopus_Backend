@@ -1,6 +1,7 @@
 import asyncio
 import httpx
 import json
+import re
 
 from linkedIn_services.linkedin_recruiter_automation.unipile_apis import _invite_linkedin_user_raw, \
     _create_linkedin_chat_raw, _get_linkedin_user_profile_raw, _safe_json
@@ -12,22 +13,18 @@ from repository.schedule_calendar_services import add_meeting_record
 UNIPILE_BASE_URL = "https://api40.unipile.com:17060"
 UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
 
-# NEW: recruiter *project* endpoints (create project, etc.) live on the
+# recruiter *project* endpoints (create project, etc.) live on the
 # main management host, not the per-account DSN host above — Unipile
 # routes these differently, so this needs its own base URL / key.
 UNIPILE_PROJECTS_BASE_URL = "https://api.unipile.com/v2"
 UNIPILE_PROJECTS_API_KEY = "bKcyr7TB.app_01kznge4wxesmap4y2wk9qnqpv.PN4y1XB4VB1blVpdmZ+94MEM0llrJ5hGbV7MPgrjlr0="
-
-import json
-import re
 
 
 def _loosen_keywords(keyword: str, logic: str) -> str:
     """
     LinkedIn's top-level `keywords` field is always a hard filter —
     there's no priority setting for it like role/skills have. If the
-    incoming string is a long AND-chain of multi-word phrases
-    (e.g. "GTM Revenue Operations Leader AND Go To Market AND ..."),
+    incoming string is a long AND-chain of multi-word phrases,
     a candidate must match ALL phrases, which is extremely restrictive
     and can easily produce 0 results.
 
@@ -36,16 +33,11 @@ def _loosen_keywords(keyword: str, logic: str) -> str:
     logic="AND" leaves the string untouched (strict matching).
     """
     if logic == "OR":
-        # Case-insensitive replace of the literal " AND " connector
         return re.sub(r"\s+AND\s+", " OR ", keyword, flags=re.IGNORECASE)
     return keyword
 
 
-
-def _format_company_filters(
-    companies: list[dict] | None
-) -> list[dict]:
-
+def _format_company_filters(companies: list[dict] | None) -> list[dict]:
     if not companies:
         return []
 
@@ -57,7 +49,6 @@ def _format_company_filters(
         for company in companies
         if company.get("id")
     ]
-
 
 
 async def search_linkedin_people(
@@ -76,28 +67,16 @@ async def search_linkedin_people(
     """
     Search LinkedIn Recruiter people.
 
-    Supports:
-    - keywords
-    - location
-    - seniority
-    - past company
-    - current company
-
     NOTE on keyword handling — the incoming `keyword` string is split
     on " AND " into individual phrases, then distributed as follows
-    (using the example "Python SQL Backend Developer AND Python AND
-    SQL AND REST APIs AND Backend Development AND Database
-    Optimization", with default max_keyword_phrases=2):
+    (default max_keyword_phrases=2):
 
-    - `role`: only the 2ND phrase (e.g. "Python"). Unchanged from
-      before.
+    - `role`: only the 2ND phrase. Unchanged from before.
     - `keywords`: the FIRST `max_keyword_phrases` phrases, joined with
-      `keyword_logic` (e.g. "Python SQL Backend Developer OR Python").
-    - `skills`: the NEXT `max_keyword_phrases` phrases after that
-      (e.g. "SQL OR REST APIs") — a genuinely different slice from
-      `keywords`, rather than duplicating the same value. If there
-      aren't enough phrases left for a distinct skills slice, it
-      falls back to the same value as `keywords`.
+      `keyword_logic`.
+    - `skills`: the NEXT `max_keyword_phrases` phrases after that —
+      a genuinely different slice from `keywords`. Falls back to the
+      same value as `keywords` if there aren't enough phrases left.
     """
 
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
@@ -113,50 +92,29 @@ async def search_linkedin_people(
         "content-type": "application/json",
     }
 
-    # ---------------------------------------------------------
-    # Split the raw keyword string into its AND-chained phrases.
-    # ---------------------------------------------------------
     keyword_parts = re.split(r"\s+AND\s+", keyword.strip(), flags=re.IGNORECASE)
     keyword_parts = [p.strip() for p in keyword_parts if p.strip()]
 
     connector = " OR " if keyword_logic == "OR" else " AND "
 
-    # ---------------------------------------------------------
-    # keywords: first `max_keyword_phrases` phrases
-    # ---------------------------------------------------------
     keywords_slice = keyword_parts[:max_keyword_phrases]
     effective_keyword = (
         connector.join(keywords_slice) if keywords_slice else keyword.strip()
     )
 
-    # ---------------------------------------------------------
-    # skills: the NEXT `max_keyword_phrases` phrases (a different
-    # slice from keywords). Falls back to effective_keyword only if
-    # there aren't enough remaining phrases to be distinct.
-    # ---------------------------------------------------------
     skills_slice = keyword_parts[max_keyword_phrases: max_keyword_phrases * 2]
     effective_skills = (
         connector.join(skills_slice) if skills_slice else effective_keyword
     )
 
-    # ---------------------------------------------------------
-    # role: unchanged — uses only the 2nd AND-chained phrase,
-    # falling back to effective_keyword if fewer than 2 phrases.
-    # ---------------------------------------------------------
     role_keyword = keyword_parts[1] if len(keyword_parts) >= 2 else effective_keyword
 
     payload = {
         "api": "recruiter",
         "category": "people",
-
         "keywords": effective_keyword,
-
         "locale": "english",
     }
-
-    # ---------------------------------------------------------
-    # ROLE — uses only the 2nd keyword phrase (unchanged)
-    # ---------------------------------------------------------
 
     payload["role"] = [
         {
@@ -166,10 +124,6 @@ async def search_linkedin_people(
         }
     ]
 
-    # ---------------------------------------------------------
-    # SKILLS — uses a different slice than keywords
-    # ---------------------------------------------------------
-
     payload["skills"] = [
         {
             "keywords": effective_skills,
@@ -177,202 +131,58 @@ async def search_linkedin_people(
         }
     ]
 
-    # ---------------------------------------------------------
-    # LOCATION
-    # ---------------------------------------------------------
-
     if location:
-
-        formatted_location = [
-            {
-                "id": str(loc["id"])
-            }
-            for loc in location
-            if loc.get("id")
-        ]
-
+        formatted_location = [{"id": str(loc["id"])} for loc in location if loc.get("id")]
         if formatted_location:
             payload["location"] = formatted_location
 
-    # ---------------------------------------------------------
-    # SENIORITY
-    # ---------------------------------------------------------
-
     if seniority:
-
         cleaned_seniority = {}
-
         if seniority.get("include"):
-            cleaned_seniority["include"] = (
-                seniority["include"]
-            )
-
+            cleaned_seniority["include"] = seniority["include"]
         if seniority.get("exclude"):
-            cleaned_seniority["exclude"] = (
-                seniority["exclude"]
-            )
-
+            cleaned_seniority["exclude"] = seniority["exclude"]
         if cleaned_seniority:
             payload["seniority"] = cleaned_seniority
 
-    # ---------------------------------------------------------
-    # PAST COMPANY
-    # ---------------------------------------------------------
-
-    formatted_past_company = _format_company_filters(
-        past_company
-    )
-
+    formatted_past_company = _format_company_filters(past_company)
     if formatted_past_company:
         payload["past_company"] = formatted_past_company
 
-    # ---------------------------------------------------------
-    # CURRENT COMPANY
-    # ---------------------------------------------------------
-
-    formatted_current_company = _format_company_filters(
-        current_company
-    )
-
+    formatted_current_company = _format_company_filters(current_company)
     if formatted_current_company:
         payload["current_company"] = formatted_current_company
 
-    # ---------------------------------------------------------
-    # REQUEST
-    # ---------------------------------------------------------
-
     try:
-
-        async with httpx.AsyncClient(
-                timeout=120.0
-        ) as client:
-
-            print("Sending LinkedIn Recruiter request...")
-
-            print("URL:", url)
-            print("Params:", params)
-            print(
-                "Payload:",
-                json.dumps(
-                    payload,
-                    indent=2
-                )
-            )
-
-            response = await client.post(
-                url,
-                params=params,
-                headers=headers,
-                json=payload,
-            )
-
-            print(
-                "Status:",
-                response.status_code
-            )
-
-            print(
-                "Response:",
-                response.text
-            )
-
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(url, params=params, headers=headers, json=payload)
             response.raise_for_status()
-
             return response.json()
 
     except httpx.ReadTimeout:
-
-        print(
-            "❌ Unipile request timed out "
-            "after 120 seconds."
-        )
-
+        print("❌ Unipile search request timed out after 120s.")
         return None
 
     except httpx.HTTPStatusError as e:
+        print(f"❌ Unipile search HTTP error {e.response.status_code}: {e.response.text[:500]}")
 
-        print(
-            "❌ HTTP Error:",
-            e.response.status_code
-        )
-
+        # Full error body still written to disk for deep debugging,
+        # just not dumped into stdout/logs by default.
         try:
-
             error_body = e.response.json()
-
-            with open(
-                    "unipile_error.json",
-                    "w",
-                    encoding="utf-8"
-            ) as f:
-
-                json.dump(
-                    error_body,
-                    f,
-                    indent=2
-                )
-
-            print(
-                "❌ Full error written "
-                "to unipile_error.json"
-            )
-
-            detail = error_body.get(
-                "detail",
-                ""
-            )
-
-            idx = detail.find(
-                '"title":"Recruiter - People"'
-            )
-
-            if idx != -1:
-
-                print(
-                    "---- Recruiter - People schema ----"
-                )
-
-                print(
-                    detail[
-                    max(0, idx - 5):
-                    idx + 4000
-                    ]
-                )
-
-            else:
-
-                print(
-                    "⚠️ Could not locate "
-                    "'Recruiter - People' section."
-                )
-
-                print(detail[:2000])
-
-        except Exception as parse_exc:
-
-            print(
-                "⚠️ Could not parse error body:",
-                parse_exc
-            )
-
-            print(
-                "Raw response:",
-                e.response.text
-            )
+            with open("unipile_error.json", "w", encoding="utf-8") as f:
+                json.dump(error_body, f, indent=2)
+        except Exception:
+            pass
 
         return None
 
     except httpx.RequestError as e:
-
-        print(
-            "❌ Request Error:",
-            str(e)
-        )
-
+        print(f"❌ Unipile search request error: {e}")
         return None
 
 
-# ── Unipile recruiter project helpers (NEW) ─────────────────────────────────
+# ── Unipile recruiter project helpers ───────────────────────────────────────
 
 async def create_unipile_recruiter_project(
     account_id: str,
@@ -381,10 +191,7 @@ async def create_unipile_recruiter_project(
 ) -> dict | None:
     """
     POST /v2/{account_id}/linkedin/recruiter/projects
-
-    Creates a Unipile recruiter project named `project_name` and returns
-    the parsed JSON response (e.g. {"object": "ProjectCreated",
-    "project_id": "1539201617"}), or None on failure.
+    Returns the parsed JSON response, or None on failure.
     """
 
     url = f"{UNIPILE_PROJECTS_BASE_URL}/{account_id}/linkedin/recruiter/projects"
@@ -395,29 +202,16 @@ async def create_unipile_recruiter_project(
         "content-type": "application/json",
     }
 
-    payload = {
-        "visibility": visibility,
-        "name": project_name,
-    }
+    payload = {"visibility": visibility, "name": project_name}
 
     try:
-
         async with httpx.AsyncClient(timeout=30.0) as client:
-
-            response = await client.post(
-                url,
-                headers=headers,
-                json=payload,
-            )
+            response = await client.post(url, headers=headers, json=payload)
 
             if response.status_code in (200, 201):
                 return response.json()
 
-            print(
-                f"❌ Unipile project creation failed: "
-                f"{response.status_code} {response.text}"
-            )
-
+            print(f"❌ Unipile project creation failed: {response.status_code} {response.text[:300]}")
             return None
 
     except httpx.RequestError as e:
@@ -435,14 +229,8 @@ async def add_candidate_to_unipile_pipeline(
     POST /api/v1/linkedin/user/{candidate_linkedin_id}
     action=addCandidateToPipeline
 
-    `candidate_linkedin_id` must be the search result's `id` field
-    (e.g. "AEMAADcP9wMBk3-WhxeDyf73fJ4fqzLd1_A_q94") — NOT
-    `public_identifier` (the vanity URL slug, e.g.
-    "rahul-kumar-gupta-62b462219"). The two look similar in shape but
-    the pipeline endpoint only accepts the former.
-
-    Adds a candidate to the given Unipile recruiter project's pipeline
-    at `stage` ("UNCONTACTED" or "CONTACTED"). Returns True on success.
+    `candidate_linkedin_id` must be the search result's `id` field —
+    NOT `public_identifier` (the vanity URL slug).
     """
 
     url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/user/{candidate_linkedin_id}"
@@ -462,23 +250,14 @@ async def add_candidate_to_unipile_pipeline(
     }
 
     try:
-
         async with httpx.AsyncClient(timeout=30.0) as client:
-
-            response = await client.post(
-                url,
-                headers=headers,
-                json=payload,
-            )
+            response = await client.post(url, headers=headers, json=payload)
 
             if response.status_code in (200, 201):
                 return True
 
-            print(
-                f"❌ Add-to-pipeline failed for {candidate_linkedin_id}: "
-                f"{response.status_code} {response.text}"
-            )
-
+            print(f"❌ Add-to-pipeline failed for {candidate_linkedin_id}: "
+                  f"{response.status_code} {response.text[:300]}")
             return False
 
     except httpx.RequestError as e:
@@ -486,7 +265,7 @@ async def add_candidate_to_unipile_pipeline(
         return False
 
 
-# ── Outreach pipeline ───────────────────────────────────────────────────────
+# ── Outreach pipeline ────────────────────────────────────────────────────────
 
 async def run_outreach_pipeline(
     account_id: str,
@@ -510,23 +289,16 @@ async def run_outreach_pipeline(
        every saved candidate to that project's pipeline
 
     NOTE: InMail sending, connection invites, and meeting record
-    creation are TEMPORARILY DISABLED. This currently only searches,
-    saves candidates, and syncs them into the Unipile pipeline — no
-    outreach is sent. Re-enable by uncommenting STEP 3 below.
+    creation are TEMPORARILY DISABLED. Re-enable by uncommenting STEP 3.
 
     Unipile setup note — two separate Unipile accounts are in play here:
     - `account_id`: the DSN/action account (search, addCandidateToPipeline)
-      — same one already used for search_linkedin_people, on
-      UNIPILE_BASE_URL / UNIPILE_API_KEY.
+      on UNIPILE_BASE_URL / UNIPILE_API_KEY.
     - `projects_account_id`: the account recruiter *projects* are created
       under, on UNIPILE_PROJECTS_BASE_URL / UNIPILE_PROJECTS_API_KEY.
-      Defaulted to the value from your curl example — pass it explicitly
-      if that's not actually a fixed/shared value in your setup.
     """
 
-    # ---------------------------------------------------------
-    # STEP 1: Search LinkedIn
-    # ---------------------------------------------------------
+    # ── STEP 1: Search LinkedIn ──────────────────────────────────────────
     search_result = await search_linkedin_people(
         account_id=account_id,
         keyword=keyword,
@@ -547,20 +319,20 @@ async def run_outreach_pipeline(
         print("⚠️ Search returned no candidates.")
         return
 
-    print(
-        f"ℹ️ Total matching candidates available on LinkedIn: "
-        f"{search_result.get('paging', {}).get('total_count')}"
-    )
+    total_available = search_result.get("paging", {}).get("total_count")
+    print(f"ℹ️ Search returned {len(candidates)} candidates (total available: {total_available})")
 
-    # ---------------------------------------------------------
-    # STEP 2: Save candidates
-    # ---------------------------------------------------------
+    # Duplicate-id check — only logs when it actually finds a problem,
+    # since Unipile's `id` field is also the DynamoDB range key.
+    ids = [c.get("id") for c in candidates]
+    if len(set(ids)) != len(ids):
+        dupes = {i for i in ids if ids.count(i) > 1}
+        print(f"⚠️ {len(ids) - len(set(ids))} duplicate candidate id(s) in search response: {dupes}")
+
+    # ── STEP 2: Save candidates ──────────────────────────────────────────
     save_candidates(project_id, candidates, project_name)
 
-    # ---------------------------------------------------------
-    # NEW: Create Unipile recruiter project + sync candidates into
-    # its pipeline (project name = `project_name`)
-    # ---------------------------------------------------------
+    # ── STEP 2b: Create Unipile recruiter project + sync pipeline ───────
     unipile_project_id = None
 
     project_result = await create_unipile_recruiter_project(
@@ -570,31 +342,22 @@ async def run_outreach_pipeline(
 
     if project_result:
         unipile_project_id = project_result.get("project_id")
-        print(
-            f"✅ Unipile recruiter project created: "
-            f"'{project_name}' (project_id={unipile_project_id})"
-        )
+        print(f"✅ Unipile recruiter project '{project_name}' created (project_id={unipile_project_id})")
 
     if unipile_project_id:
-
         added_count = 0
+        skipped_count = 0
 
         for candidate in candidates:
-
-            full_name = candidate.get("full_name") or candidate.get("name")
             candidate_linkedin_id = candidate.get("id")
 
             if not candidate_linkedin_id:
-                print(
-                    f"⚠️ Skipping pipeline add for {full_name} — "
-                    f"no id found"
-                )
+                skipped_count += 1
                 continue
 
             # Always UNCONTACTED for now since InMail/connection sending
-            # (STEP 3) is disabled. Once STEP 3 is re-enabled, pass
-            # stage="CONTACTED" from inside that block for candidates
-            # whose inmail_success is True.
+            # (STEP 3) is disabled. Once re-enabled, pass
+            # stage="CONTACTED" from inside that block when inmail_success.
             success = await add_candidate_to_unipile_pipeline(
                 account_id=account_id,
                 hiring_project_id=unipile_project_id,
@@ -604,23 +367,16 @@ async def run_outreach_pipeline(
 
             if success:
                 added_count += 1
-                print(f"✅ Added {full_name} to Unipile pipeline")
 
-        print(
-            f"ℹ️ {added_count}/{len(candidates)} candidates added to "
-            f"Unipile pipeline (project_id={unipile_project_id})"
-        )
+        print(f"ℹ️ {added_count}/{len(candidates)} candidates added to Unipile pipeline "
+              f"(project_id={unipile_project_id}, skipped_no_id={skipped_count})")
 
     else:
-        print(
-            "⚠️ Skipping pipeline sync — no Unipile project_id available."
-        )
+        print("⚠️ Skipping pipeline sync — no Unipile project_id available.")
 
-    print(
-        f"✅ Outreach pipeline complete for project {project_id} "
-        f"— {len(candidates)} saved. Outreach (InMail/connection) is "
-        f"currently disabled — no messages were sent."
-    )
+    print(f"✅ Outreach pipeline complete for project {project_id} — "
+          f"{len(candidates)} candidates processed. Outreach (InMail/connection) is disabled.")
+
 
     # =====================================================================
     # STEP 3: Process candidates — DISABLED FOR NOW
