@@ -1,29 +1,3 @@
-"""
-linkedin_recruiter_search.py
-
-One-page pipeline:
-  1. Take a raw job description (JD) as text.
-  2. Ask OpenAI (gpt-4o-mini) to extract structured search parameters from it
-     (title/role keywords, skills, target locations, target companies, seniority).
-  3. Resolve each location / company name to a Unipile/LinkedIn numeric ID via
-     GET /linkedin/search/parameters (always taking the FIRST match, per your rule).
-  4. Assemble the final Unipile Recruiter search payload (same shape as your
-     working curl example).
-  5. POST it to /linkedin/search and return the raw response JSON.
-
-Usage:
-    python linkedin_recruiter_search.py path/to/jd.txt
-    # or
-    from linkedin_recruiter_search import run_pipeline
-    result = run_pipeline(jd_text)
-
-Required environment variables (do NOT hardcode secrets in this file):
-    OPENAI_API_KEY
-    UNIPILE_API_KEY
-    UNIPILE_ACCOUNT_ID      e.g. D8lUBYotRuGOlA7cOQ4egQ
-    UNIPILE_BASE_URL        e.g. https://api40.unipile.com:17060/api/v1
-"""
-
 import os
 import json
 import requests
@@ -58,8 +32,8 @@ extract structured LinkedIn Recruiter search parameters. Respond with ONLY valid
 (no markdown fences, no commentary) matching exactly this schema:
 
 {{
-  "title_keywords": "a SHORT boolean string of 2-4 title variants joined with OR, e.g. \\"Backend Engineer\\" OR \\"Software Engineer\\" OR \\"Platform Engineer\\". Never chain more than one AND in this string.",
-  "role_keywords": "leave this EMPTY STRING unless the JD needs functional-role matching that title_keywords doesn't already cover. Do not restate the same terms as title_keywords — that double-filters and causes 0 results.",
+  "title_keywords": "a SHORT boolean string of 2-4 title variants joined with OR, e.g. \\"Backend Engineer\\" OR \\"Software Engineer\\" OR \\"Platform Engineer\\". Never chain more than one AND in this string. NEVER include a company name in this field — 'Zoho Developer' is WRONG (it forces the literal phrase 'Zoho Developer' and matches almost nobody); the correct extraction is title_keywords: \\"Developer\\" OR \\"Software Engineer\\" OR \\"Software Developer\\" together with preferred_companies: [\\"Zoho\\"]. Company names belong ONLY in preferred_companies, never in title_keywords, role_keywords, or skills_keywords.",
+  "role_keywords": "leave this EMPTY STRING unless the JD needs functional-role matching that title_keywords doesn't already cover. Do not restate the same terms as title_keywords — that double-filters and causes 0 results. Same company-name rule applies here as title_keywords.",
   "skills_keywords": "at most 2-3 CORE skills joined with OR, not AND. Only include a skill here if a candidate missing it would clearly be unqualified. Do not list every technology mentioned in the JD — that stacks filters and eliminates otherwise-good candidates.",
   "locations": ["city or region name — only what's explicitly stated, max 3"],
   "preferred_companies": ["Company Name — ONLY if the JD explicitly says target/poach from these companies. Do not infer companies from industry context."],
@@ -196,13 +170,16 @@ def build_payload(extracted: dict, *, role_priority: str = "MUST_HAVE",
     payload = {
         "api": "recruiter",
         "category": "people",
-        # Only send the top-level global keywords filter when role_keywords
-        # is empty (i.e. title_keywords is the only signal we have) — never
-        # send the same concept as both "keywords" and "role" at once, that
-        # was the main source of double-filtering / 0 results.
-        "keywords": extracted.get("title_keywords", "")
-        if (include_top_keywords and not extracted.get("role_keywords"))
-        else "",
+        # The "role" field (above) already carries the title signal, falling
+        # back to title_keywords whenever role_keywords is empty. So if
+        # role_block ended up populated at all, the top-level "keywords"
+        # filter would just be restating the same string as a SECOND,
+        # independently-ANDed filter — that's the exact bug that produced
+        # 0/1-result searches (e.g. "Zoho Developer" in both places at
+        # once). Top-level "keywords" is only ever sent when role_block is
+        # genuinely empty, which in practice means there was no title
+        # signal to send there either.
+        "keywords": extracted.get("title_keywords", "") if (include_top_keywords and not role_block) else "",
         "role": role_block,
         "skills": skills_block,
         "location": location_objs,
@@ -220,14 +197,21 @@ def build_payload(extracted: dict, *, role_priority: str = "MUST_HAVE",
     return {k: v for k, v in payload.items() if v not in ("", [], None)}
 
 
-def run_search(payload: dict) -> dict:
-    """POST the assembled payload to the Unipile LinkedIn Recruiter search endpoint."""
+def run_search(payload: dict, limit: int = 100) -> dict:
+    """POST the assembled payload to the Unipile LinkedIn Recruiter search endpoint.
+
+    limit defaults to 100 — the documented max for Recruiter/Sales Navigator
+    (Classic search caps lower, around 50). The default of 10 was silently
+    truncating result pages; this doesn't change how many candidates LinkedIn
+    actually has (that's paging.total_count), but stops under-fetching when
+    there ARE more than 10 to return.
+    """
     headers = {
         "X-API-KEY": UNIPILE_API_KEY,
         "accept": "application/json",
         "content-type": "application/json",
     }
-    params = {"account_id": UNIPILE_ACCOUNT_ID}
+    params = {"account_id": UNIPILE_ACCOUNT_ID, "limit": limit}
     resp = requests.post(UNIPILE_SEARCH_URL, headers=headers, params=params, json=payload, timeout=60)
     resp.raise_for_status()
     return resp.json()
