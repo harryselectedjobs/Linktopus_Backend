@@ -154,6 +154,9 @@ async def search_linkedin_people(
         payload["current_company"] = formatted_current_company
 
     try:
+        print("payload")
+        print(payload)
+        print("payload")
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(url, params=params, headers=headers, json=payload)
             response.raise_for_status()
