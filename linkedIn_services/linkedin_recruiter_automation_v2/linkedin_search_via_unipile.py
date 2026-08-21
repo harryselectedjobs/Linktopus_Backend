@@ -45,26 +45,40 @@ SENIORITY_ALLOWED = [
     "senior", "entry", "training", "unpaid",
 ]
 
+# ---------------------------------------------------------------------------
+# 1) Extraction prompt — rewritten to teach GPT the Unipile Recruiter schema
+#    and, critically, to bias toward BROAD boolean strings and to NOT decide
+#    priority itself. Priority (CAN_HAVE vs MUST_HAVE) is decided in code
+#    below, where it can be controlled and progressively loosened. Letting
+#    the LLM freely choose MUST_HAVE per field is exactly what was producing
+#    over-constrained, zero-result payloads.
+# ---------------------------------------------------------------------------
 EXTRACTION_SYSTEM_PROMPT = f"""You are a technical recruiter assistant. Given a job description,
 extract structured LinkedIn Recruiter search parameters. Respond with ONLY valid JSON
 (no markdown fences, no commentary) matching exactly this schema:
 
 {{
-  "title_keywords": "boolean keyword string for the 'keywords' field, e.g. \\"Title A\\" OR \\"Title B\\"",
-  "role_keywords": "boolean keyword string for functional/role matching",
-  "skills_keywords": "boolean keyword string for the skills field",
-  "locations": ["city or region name", "..."],
-  "preferred_companies": ["Company Name", "..."],
-  "seniority_levels": ["one or more values, LOWERCASE ONLY, chosen strictly from this fixed set: {', '.join(SENIORITY_ALLOWED)}"],
+  "title_keywords": "a SHORT boolean string of 2-4 title variants joined with OR, e.g. \\"Backend Engineer\\" OR \\"Software Engineer\\" OR \\"Platform Engineer\\". Never chain more than one AND in this string.",
+  "role_keywords": "leave this EMPTY STRING unless the JD needs functional-role matching that title_keywords doesn't already cover. Do not restate the same terms as title_keywords — that double-filters and causes 0 results.",
+  "skills_keywords": "at most 2-3 CORE skills joined with OR, not AND. Only include a skill here if a candidate missing it would clearly be unqualified. Do not list every technology mentioned in the JD — that stacks filters and eliminates otherwise-good candidates.",
+  "locations": ["city or region name — only what's explicitly stated, max 3"],
+  "preferred_companies": ["Company Name — ONLY if the JD explicitly says target/poach from these companies. Do not infer companies from industry context."],
+  "seniority_levels": ["optional. LOWERCASE ONLY, chosen strictly from this fixed set: {', '.join(SENIORITY_ALLOWED)}. Leave empty unless the JD is explicit about seniority — this filter is a common cause of 0 results when guessed."],
   "employment_type": ["FULL_TIME"]
 }}
 
-Only include locations/companies that are explicitly named or clearly implied in the JD.
-Keep each keyword string boolean-search-ready (quoted phrases joined with OR/AND).
-For seniority_levels: pick ONLY from {SENIORITY_ALLOWED} (lowercase, exact spelling, no synonyms
-outside this list). Map the JD's stated seniority to the closest matching value(s) in the set —
-e.g. a "C-suite / Chief X Officer" role maps to "cxo"; "VP"/"SVP" maps to "vp"; "entry-level" maps
-to "entry"."""
+CRITICAL RULES TO AVOID ZERO-RESULT SEARCHES:
+- Prefer OR over AND everywhere. A boolean string like "A" AND "B" AND "C" requires all
+  three literally in the profile text and very often matches nobody. "A" OR "B" OR "C" is
+  almost always what's actually wanted (candidate could be described any of those ways).
+- Do NOT put the same concept in both title_keywords and role_keywords. Pick one.
+- Keep skills_keywords short. 6 ANDed or even 6 separately-required skills filters is a
+  near-guaranteed 0-candidate search on real LinkedIn data.
+- Only include locations/companies/seniority that are explicitly named or unambiguous in
+  the JD. When in doubt, leave the field empty — an empty filter is skipped entirely and
+  widens the search, which is safer than a wrong or overly narrow guess.
+- Map JD seniority to the closest single value in the fixed set (e.g. "C-suite" -> "cxo",
+  "VP"/"SVP" -> "vp", "entry-level" -> "entry") — never invent a value outside the set."""
 
 
 def extract_search_params(jd_text: str) -> dict:
@@ -90,9 +104,10 @@ def extract_search_params(jd_text: str) -> dict:
 
 def resolve_id(keyword: str, param_type: str) -> tuple[str, str] | None:
     """
-    Look up a Unipile search parameter by keyword and return (id, title) of the
-    FIRST result, per your rule of always taking the top match.
-    Returns None if nothing is found.
+    Look up a Unipile search parameter by keyword. Prefers an exact
+    case-insensitive title match over the first fuzzy result — taking the
+    literal first hit was silently resolving locations/companies to the
+    wrong entity (e.g. an obscure micro-region) and tanking result counts.
     """
     headers = {"X-API-KEY": UNIPILE_API_KEY, "accept": "application/json"}
     params = {
@@ -105,8 +120,16 @@ def resolve_id(keyword: str, param_type: str) -> tuple[str, str] | None:
     items = resp.json().get("items", [])
     if not items:
         return None
-    first = items[0]
-    return first["id"], first["title"]
+
+    exact = next(
+        (it for it in items if it.get("title", "").strip().lower() == keyword.strip().lower()),
+        None,
+    )
+    chosen = exact or items[0]
+    if not exact and len(items) > 1:
+        print(f"  NOTE: no exact match for '{keyword}', using top fuzzy result "
+              f"'{chosen['title']}' out of {len(items)} candidates")
+    return chosen["id"], chosen["title"]
 
 
 def sanitize_seniority(levels: list) -> list:
@@ -121,51 +144,77 @@ def sanitize_seniority(levels: list) -> list:
     return cleaned
 
 
-def build_payload(extracted: dict) -> dict:
-    """Resolve locations/companies to IDs and assemble the final search payload."""
+# ---------------------------------------------------------------------------
+# 2) Payload building — priority is decided HERE, in code, not by the LLM.
+#    Everything defaults to CAN_HAVE. Only role gets MUST_HAVE, and only on
+#    the first attempt; the fallback ladder below downgrades it if needed.
+# ---------------------------------------------------------------------------
+def build_payload(extracted: dict, *, role_priority: str = "MUST_HAVE",
+                   include_skills: bool = True, include_company: bool = True,
+                   include_top_keywords: bool = True, include_location: bool = True,
+                   include_seniority: bool = False) -> dict:
+    """Resolve locations/companies to IDs and assemble the search payload.
+
+    The keyword args are the loosening knobs used by search_with_fallback —
+    each one strips or downgrades a filter without needing a fresh OpenAI call.
+    """
     location_objs = []
-    for loc_name in extracted.get("locations", []):
-        resolved = resolve_id(loc_name, "LOCATION")
-        if resolved:
-            loc_id, loc_title = resolved
-            location_objs.append({"id": loc_id, "priority": "CAN_HAVE"})
-            print(f"  location '{loc_name}' -> {loc_title} ({loc_id})")
-        else:
-            print(f"  WARNING: no location match for '{loc_name}', skipping")
+    if include_location:
+        for loc_name in extracted.get("locations", []):
+            resolved = resolve_id(loc_name, "LOCATION")
+            if resolved:
+                loc_id, loc_title = resolved
+                location_objs.append({"id": loc_id, "priority": "CAN_HAVE"})
+                print(f"  location '{loc_name}' -> {loc_title} ({loc_id})")
+            else:
+                print(f"  WARNING: no location match for '{loc_name}', skipping")
 
     company_objs = []
-    for company_name in extracted.get("preferred_companies", []):
-        resolved = resolve_id(company_name, "COMPANY")
-        if resolved:
-            comp_id, comp_title = resolved
-            company_objs.append({"id": comp_id, "priority": "CAN_HAVE"})
-            print(f"  company '{company_name}' -> {comp_title} ({comp_id})")
-        else:
-            print(f"  WARNING: no company match for '{company_name}', skipping")
+    if include_company:
+        for company_name in extracted.get("preferred_companies", []):
+            resolved = resolve_id(company_name, "COMPANY")
+            if resolved:
+                comp_id, comp_title = resolved
+                company_objs.append({"id": comp_id, "priority": "CAN_HAVE"})
+                print(f"  company '{company_name}' -> {comp_title} ({comp_id})")
+            else:
+                print(f"  WARNING: no company match for '{company_name}', skipping")
+
+    role_keywords = extracted.get("role_keywords") or extracted.get("title_keywords", "")
+    role_block = [
+        {
+            "keywords": role_keywords,
+            "priority": role_priority,
+            "scope": "CURRENT_OR_PAST",
+        }
+    ] if role_keywords else []
+
+    skills_block = [
+        {"keywords": extracted.get("skills_keywords", ""), "priority": "CAN_HAVE"}
+    ] if (include_skills and extracted.get("skills_keywords")) else []
 
     payload = {
         "api": "recruiter",
         "category": "people",
-        "keywords": extracted.get("title_keywords", ""),
-        "role": [
-            {
-                "keywords": extracted.get("role_keywords", ""),
-                "priority": "MUST_HAVE",
-                "scope": "CURRENT_OR_PAST",
-            }
-        ] if extracted.get("role_keywords") else [],
-        "skills": [
-            {"keywords": extracted.get("skills_keywords", ""), "priority": "CAN_HAVE"}
-        ] if extracted.get("skills_keywords") else [],
+        # Only send the top-level global keywords filter when role_keywords
+        # is empty (i.e. title_keywords is the only signal we have) — never
+        # send the same concept as both "keywords" and "role" at once, that
+        # was the main source of double-filtering / 0 results.
+        "keywords": extracted.get("title_keywords", "")
+        if (include_top_keywords and not extracted.get("role_keywords"))
+        else "",
+        "role": role_block,
+        "skills": skills_block,
         "location": location_objs,
         "current_company": company_objs,
         "past_company": company_objs,
         "employment_type": extracted.get("employment_type", ["FULL_TIME"]),
     }
 
-    # seniority_levels = sanitize_seniority(extracted.get("seniority_levels", []))
-    # if seniority_levels:
-    #     payload["seniority"] = {"include": seniority_levels}
+    if include_seniority:
+        seniority_levels = sanitize_seniority(extracted.get("seniority_levels", []))
+        if seniority_levels:
+            payload["seniority"] = {"include": seniority_levels}
 
     # Drop empty lists/strings so we don't send noisy filters
     return {k: v for k, v in payload.items() if v not in ("", [], None)}
@@ -184,24 +233,59 @@ def run_search(payload: dict) -> dict:
     return resp.json()
 
 
+def _result_count(result: dict) -> int:
+    # Unipile returns paginated results; total count is the reliable signal
+    # of whether the search is too narrow, independent of `limit`.
+    return result.get("paging", {}).get("total_count", len(result.get("items", [])))
+
+
+# ---------------------------------------------------------------------------
+# 3) Automatic fallback ladder — if a search comes back empty, progressively
+#    loosen the SAME extracted parameters (no extra OpenAI calls) and retry.
+#    Each rung removes exactly one source of over-constraint. First non-empty
+#    rung wins; if every rung is empty, return the broadest attempt with a
+#    clear note so it's visible in logs rather than silently "0 candidates".
+# ---------------------------------------------------------------------------
+def search_with_fallback(extracted: dict) -> dict:
+    ladder = [
+        ("full payload (role=MUST_HAVE)", dict(role_priority="MUST_HAVE")),
+        ("drop skills filter", dict(role_priority="MUST_HAVE", include_skills=False)),
+        ("role downgraded to CAN_HAVE", dict(role_priority="CAN_HAVE", include_skills=False)),
+        ("drop company filter", dict(role_priority="CAN_HAVE", include_skills=False, include_company=False)),
+        ("role keywords only, no location", dict(role_priority="CAN_HAVE", include_skills=False,
+                                                   include_company=False, include_location=False)),
+    ]
+
+    last_result = None
+    last_payload = None
+    for label, kwargs in ladder:
+        payload = build_payload(extracted, **kwargs)
+        print(f"\nAttempt [{label}]:")
+        print(json.dumps(payload, indent=2))
+        result = run_search(payload)
+        count = _result_count(result)
+        print(f"  -> {count} total candidates")
+        last_result, last_payload = result, payload
+        if count > 0:
+            result["_fallback_step"] = label
+            result["_payload_used"] = payload
+            return result
+
+    print("\nWARNING: every fallback rung returned 0 candidates. "
+          "The JD's own criteria may genuinely be too niche for this LinkedIn "
+          "account's network/plan — worth checking manually.")
+    last_result["_fallback_step"] = "exhausted all rungs, still 0"
+    last_result["_payload_used"] = last_payload
+    return last_result
+
+
 def run_pipeline_v2(jd_text: str) -> dict:
-    """Full pipeline: JD text -> OpenAI extraction -> ID resolution -> search -> results."""
+    """Full pipeline: JD text -> OpenAI extraction -> ID resolution -> search (with fallback)."""
     print("Extracting search parameters from JD via OpenAI...")
     extracted = extract_search_params(jd_text)
     print(json.dumps(extracted, indent=2))
 
-    print("\nResolving location/company IDs via Unipile...")
-    payload = build_payload(extracted)
-    print("\nFinal payload:")
-    print(json.dumps(payload, indent=2))
-
-    print("\nRunning LinkedIn Recruiter search...")
-    result = run_search(payload)
+    print("\nRunning LinkedIn Recruiter search with automatic loosening on 0 results...")
+    result = search_with_fallback(extracted)
+    print(f"\nFinal: used rung '{result.get('_fallback_step')}'")
     return result
-
-
-if __name__ == "__main__":
-    jd_text="### Job Title\nSenior Customer Experience / Customer Support Leader\n\n### About the Role\nWe are seeking a highly experienced Senior Customer Experience / Customer Support Leader to oversee our customer-facing operations. This pivotal role requires a strategic thinker with a proven track record in enhancing customer satisfaction and support operations through innovative solutions.\n\n### Key Responsibilities\n- Lead and manage large customer-facing teams to deliver exceptional customer service.\n- Develop and implement strategies to improve customer satisfaction and retention.\n- Utilize technology, analytics, automation, and AI to streamline support operations and enhance customer experience.\n- Collaborate with cross-functional teams to ensure alignment of customer service initiatives with business objectives.\n- Analyze customer feedback and operational metrics to drive continuous improvement.\n- Foster a culture of excellence and accountability within the customer support team.\n- Communicate effectively with executive leadership and stakeholders regarding customer experience strategies and outcomes.\n\n### Required Skills / Qualifications\n- Extensive experience in customer support and experience management.\n- Strong knowledge of customer satisfaction metrics and improvement strategies.\n- Proficient in leveraging technology and analytics to enhance customer service.\n- Excellent executive-level leadership and communication skills.\n\n### Experience\n- Minimum of 15 years of experience in customer experience or customer support roles, with a focus on managing large teams.\n\n### Location\nThis position is available in New York, San Francisco, Seattle, Austin, or Boston.\n\n### Preferred Company Background\nCandidates with prior experience at Oracle, Microsoft, Amazon, or Flipkart, or comparable organizations such as SAP, IBM, Salesforce, Google, Apple, Meta, Walmart, eBay, Alibaba, Snapdeal, Myntra, or Paytm will be preferred."
-    output = run_pipeline(jd_text)
-    print("\n=== SEARCH RESULTS ===")
-    print(json.dumps(output, indent=2))
