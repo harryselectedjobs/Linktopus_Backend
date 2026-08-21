@@ -14,8 +14,8 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 # IMPORTANT:
 # Do NOT hard-code real API keys in source code.
 # Put them in environment variables.
-UNIPILE_API_KEY = os.environ["UNIPILE_API_KEY"]
-UNIPILE_ACCOUNT_ID = os.environ["UNIPILE_ACCOUNT_ID"]
+UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
+UNIPILE_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
 
 UNIPILE_BASE_URL = os.environ.get(
     "UNIPILE_BASE_URL",
