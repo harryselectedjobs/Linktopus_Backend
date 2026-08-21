@@ -926,6 +926,7 @@ def build_payload(
         )
 
         if seniority_levels:
+            print("")
 
             # payload["seniority"] = {
             #     "include": seniority_levels
