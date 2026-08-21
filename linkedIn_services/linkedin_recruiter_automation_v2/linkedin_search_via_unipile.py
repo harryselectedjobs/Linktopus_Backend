@@ -1,275 +1,1457 @@
 import os
 import json
+import re
 import requests
+from typing import Optional
 
-# ---------------------------------------------------------------------------
-# Config (all from env vars — never commit real keys)
-# ---------------------------------------------------------------------------
+
+# =============================================================================
+# CONFIG
+# =============================================================================
+
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
-UNIPILE_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
-UNIPILE_BASE_URL = os.environ.get("UNIPILE_BASE_URL", "https://api40.unipile.com:17060/api/v1")
+
+# IMPORTANT:
+# Do NOT hard-code real API keys in source code.
+# Put them in environment variables.
+UNIPILE_API_KEY = os.environ["UNIPILE_API_KEY"]
+UNIPILE_ACCOUNT_ID = os.environ["UNIPILE_ACCOUNT_ID"]
+
+UNIPILE_BASE_URL = os.environ.get(
+    "UNIPILE_BASE_URL",
+    "https://api40.unipile.com:17060/api/v1"
+)
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-UNIPILE_PARAMS_URL = f"{UNIPILE_BASE_URL}/linkedin/search/parameters"
-UNIPILE_SEARCH_URL = f"{UNIPILE_BASE_URL}/linkedin/search"
 
-SENIORITY_ALLOWED = [
-    "owner", "partner", "cxo", "vp", "director", "manager",
-    "senior", "entry", "training", "unpaid",
-]
+UNIPILE_PARAMS_URL = (
+    f"{UNIPILE_BASE_URL}/linkedin/search/parameters"
+)
 
-# ---------------------------------------------------------------------------
-# 1) Extraction prompt — rewritten to teach GPT the Unipile Recruiter schema
-#    and, critically, to bias toward BROAD boolean strings and to NOT decide
-#    priority itself. Priority (CAN_HAVE vs MUST_HAVE) is decided in code
-#    below, where it can be controlled and progressively loosened. Letting
-#    the LLM freely choose MUST_HAVE per field is exactly what was producing
-#    over-constrained, zero-result payloads.
-# ---------------------------------------------------------------------------
-EXTRACTION_SYSTEM_PROMPT = f"""You are a technical recruiter assistant. Given a job description,
-extract structured LinkedIn Recruiter search parameters. Respond with ONLY valid JSON
-(no markdown fences, no commentary) matching exactly this schema:
+UNIPILE_SEARCH_URL = (
+    f"{UNIPILE_BASE_URL}/linkedin/search"
+)
 
-{{
-  "title_keywords": "a SHORT boolean string of 2-4 title variants joined with OR, e.g. \\"Backend Engineer\\" OR \\"Software Engineer\\" OR \\"Platform Engineer\\". Never chain more than one AND in this string. NEVER include a company name in this field — 'Zoho Developer' is WRONG (it forces the literal phrase 'Zoho Developer' and matches almost nobody); the correct extraction is title_keywords: \\"Developer\\" OR \\"Software Engineer\\" OR \\"Software Developer\\" together with preferred_companies: [\\"Zoho\\"]. Company names belong ONLY in preferred_companies, never in title_keywords, role_keywords, or skills_keywords.",
-  "role_keywords": "leave this EMPTY STRING unless the JD needs functional-role matching that title_keywords doesn't already cover. Do not restate the same terms as title_keywords — that double-filters and causes 0 results. Same company-name rule applies here as title_keywords.",
-  "skills_keywords": "at most 2-3 CORE skills joined with OR, not AND. Only include a skill here if a candidate missing it would clearly be unqualified. Do not list every technology mentioned in the JD — that stacks filters and eliminates otherwise-good candidates.",
-  "locations": ["city or region name — only what's explicitly stated, max 3"],
-  "preferred_companies": ["Company Name — ONLY if the JD explicitly says target/poach from these companies. Do not infer companies from industry context."],
-  "seniority_levels": ["optional. LOWERCASE ONLY, chosen strictly from this fixed set: {', '.join(SENIORITY_ALLOWED)}. Leave empty unless the JD is explicit about seniority — this filter is a common cause of 0 results when guessed."],
-  "employment_type": ["FULL_TIME"]
-}}
+# Recruiter / Sales Navigator can return up to 100 results per request.
+SEARCH_LIMIT = 100
 
-CRITICAL RULES TO AVOID ZERO-RESULT SEARCHES:
-- Prefer OR over AND everywhere. A boolean string like "A" AND "B" AND "C" requires all
-  three literally in the profile text and very often matches nobody. "A" OR "B" OR "C" is
-  almost always what's actually wanted (candidate could be described any of those ways).
-- Do NOT put the same concept in both title_keywords and role_keywords. Pick one.
-- Keep skills_keywords short. 6 ANDed or even 6 separately-required skills filters is a
-  near-guaranteed 0-candidate search on real LinkedIn data.
-- Only include locations/companies/seniority that are explicitly named or unambiguous in
-  the JD. When in doubt, leave the field empty — an empty filter is skipped entirely and
-  widens the search, which is safer than a wrong or overly narrow guess.
-- Map JD seniority to the closest single value in the fixed set (e.g. "C-suite" -> "cxo",
-  "VP"/"SVP" -> "vp", "entry-level" -> "entry") — never invent a value outside the set."""
+# Maximum number of skills we allow GPT to generate.
+MAX_SKILLS = 4
 
+# Maximum number of role/title alternatives.
+MAX_ROLE_TERMS = 5
+
+# Maximum number of companies.
+MAX_COMPANIES = 5
+
+# Maximum number of locations.
+MAX_LOCATIONS = 5
+
+
+# =============================================================================
+# OPENAI PROMPT
+# =============================================================================
+#
+# This prompt deliberately teaches GPT the SEARCH STRATEGY rather than simply
+# asking it to extract every possible filter from the JD.
+#
+# The code below ALSO enforces these rules, so we don't depend only on GPT.
+# =============================================================================
+
+EXTRACTION_SYSTEM_PROMPT = """
+You are an expert LinkedIn Recruiter search strategist.
+
+Your job is NOT to create the most restrictive search.
+
+Your job is to create a SEARCHABLE candidate pool that is broad enough to
+avoid returning zero candidates while still being relevant to the job.
+
+You are generating parameters for the Unipile LinkedIn Recruiter API.
+
+IMPORTANT SEARCH PHILOSOPHY
+============================
+
+LinkedIn Recruiter searches should behave similarly to a recruiter manually
+using LinkedIn Recruiter.
+
+Do NOT try to encode every requirement from the job description as a hard
+filter.
+
+A job description can contain many technologies, responsibilities,
+qualifications and preferred companies. Most of those should NOT become
+MUST_HAVE filters.
+
+The search should prioritize:
+
+1. Job title / role similarity
+2. Relevant location
+3. Optional relevant companies
+4. A SMALL number of relevant skills
+
+The goal is a useful candidate pool, not a mathematically perfect filter.
+
+STRICT RULES
+============
+
+RULE 1 - NEVER USE SENIORITY
+----------------------------
+
+Do not return seniority.
+
+The application will completely ignore seniority.
+
+RULE 2 - ROLE/TITLE
+-------------------
+
+Extract the most useful job-title alternatives.
+
+Use simple OR expressions.
+
+GOOD:
+
+"Python Developer" OR "Python Engineer" OR "Backend Developer"
+OR "Software Engineer"
+
+BAD:
+
+"Python Developer" AND "FastAPI" AND "AWS" AND "SQL"
+
+BAD:
+
+"Python Developer" AND "Backend Developer"
+
+The role keyword should describe JOB TITLES / ROLES.
+
+Do not put companies into role keywords.
+
+Do not put long technical requirements into role keywords.
+
+Maximum 5 role alternatives.
+
+RULE 3 - SKILLS
+----------------
+
+Only select the most important technical skills.
+
+Maximum 4 skills.
+
+Do NOT include every technology from the JD.
+
+Do NOT create a huge AND expression.
+
+Prefer simple OR.
+
+Example:
+
+Python OR FastAPI OR Django
+
+Do not produce:
+
+Python AND FastAPI AND Django AND AWS AND Docker AND PostgreSQL
+AND Redis AND Kubernetes
+
+Skills are optional supporting signals.
+
+They must NEVER be treated as hard requirements by this system.
+
+RULE 4 - COMPANY
+-----------------
+
+If the JD explicitly says candidates should have experience at certain
+companies, extract those companies separately.
+
+Never place company names inside role/title keywords.
+
+Companies are optional signals.
+
+The application will use CAN_HAVE for companies.
+
+Do not invent companies.
+
+Do not add dozens of similar companies.
+
+Maximum 5 companies.
+
+RULE 5 - LOCATION
+-----------------
+
+Extract explicit hiring locations.
+
+Location is useful, but should not be unnecessarily restrictive.
+
+Maximum 5 locations.
+
+RULE 6 - EMPLOYMENT TYPE
+------------------------
+
+Only return employment_type when the JD explicitly specifies it.
+
+Do not automatically assume FULL_TIME.
+
+If employment type is not explicitly specified, return [].
+
+RULE 7 - AND / OR
+-----------------
+
+Avoid complicated boolean expressions.
+
+Use OR for equivalent titles.
+
+Use OR for closely related skills.
+
+Do not use AND unless it is absolutely necessary.
+
+In general, a simple OR query is preferable to a strict AND query.
+
+RULE 8 - DO NOT OVERFIT
+-----------------------
+
+Do not turn every sentence of the JD into a search filter.
+
+For example, if a JD says:
+
+"Experience with Python, FastAPI, AWS, Docker, PostgreSQL, Redis,
+microservices, CI/CD and Kubernetes."
+
+Do NOT create a search requiring all of these.
+
+Instead:
+
+role:
+Python Developer OR Python Engineer OR Backend Developer
+
+skills:
+Python OR FastAPI OR AWS
+
+The remaining technologies can be used later when evaluating candidates.
+
+RULE 9 - COMPANY + TITLE
+------------------------
+
+If the JD says:
+
+"Python Developer who has worked at Microsoft, Google or Amazon"
+
+Return:
+
+role_keywords:
+Python Developer OR Python Engineer OR Backend Developer
+
+preferred_companies:
+Microsoft
+Google
+Amazon
+
+NEVER:
+
+"Microsoft Python Developer"
+
+NEVER:
+
+"Google Python Developer"
+
+NEVER:
+
+"Amazon Python Developer"
+
+RULE 10 - SEARCHABILITY
+----------------------
+
+When uncertain between a broad searchable query and a strict query,
+ALWAYS choose the broader searchable query.
+
+The application contains additional code that progressively relaxes the
+search if the initial search returns zero candidates.
+
+OUTPUT
+======
+
+Return ONLY valid JSON.
+
+Use exactly this schema:
+
+{
+  "role_keywords": "...",
+  "skills_keywords": "...",
+  "locations": [],
+  "preferred_companies": [],
+  "employment_type": []
+}
+
+Do not return seniority.
+
+Do not return additional fields.
+
+Keep role_keywords concise.
+
+Keep skills_keywords concise.
+
+Do not create complicated boolean expressions.
+"""
+
+
+# =============================================================================
+# OPENAI EXTRACTION
+# =============================================================================
 
 def extract_search_params(jd_text: str) -> dict:
-    """Call OpenAI to turn a raw JD into structured search parameters."""
+    """
+    Convert a JD into broad LinkedIn Recruiter search parameters.
+    """
+
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
-            {"role": "user", "content": jd_text},
+            {
+                "role": "system",
+                "content": EXTRACTION_SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": jd_text
+            }
         ],
         "temperature": 0,
-        "response_format": {"type": "json_object"},
+        "response_format": {
+            "type": "json_object"
+        }
     }
+
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
-    resp = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=60)
-    resp.raise_for_status()
-    content = resp.json()["choices"][0]["message"]["content"]
-    return json.loads(content)
 
-
-def resolve_id(keyword: str, param_type: str) -> tuple[str, str] | None:
-    """
-    Look up a Unipile search parameter by keyword. Prefers an exact
-    case-insensitive title match over the first fuzzy result — taking the
-    literal first hit was silently resolving locations/companies to the
-    wrong entity (e.g. an obscure micro-region) and tanking result counts.
-    """
-    headers = {"X-API-KEY": UNIPILE_API_KEY, "accept": "application/json"}
-    params = {
-        "keywords": keyword,
-        "type": param_type,
-        "account_id": UNIPILE_ACCOUNT_ID,
-    }
-    resp = requests.get(UNIPILE_PARAMS_URL, headers=headers, params=params, timeout=30)
-    resp.raise_for_status()
-    items = resp.json().get("items", [])
-    if not items:
-        return None
-
-    exact = next(
-        (it for it in items if it.get("title", "").strip().lower() == keyword.strip().lower()),
-        None,
+    response = requests.post(
+        OPENAI_URL,
+        headers=headers,
+        json=payload,
+        timeout=60
     )
-    chosen = exact or items[0]
-    if not exact and len(items) > 1:
-        print(f"  NOTE: no exact match for '{keyword}', using top fuzzy result "
-              f"'{chosen['title']}' out of {len(items)} candidates")
-    return chosen["id"], chosen["title"]
+
+    response.raise_for_status()
+
+    content = response.json()["choices"][0]["message"]["content"]
+
+    result = json.loads(content)
+
+    return result
 
 
-def sanitize_seniority(levels: list) -> list:
-    """Keep only values from the fixed allowed enum, forced to lowercase."""
+# =============================================================================
+# STRING HELPERS
+# =============================================================================
+
+def normalize_text(value: str) -> str:
+    """
+    Normalize text for comparison.
+    """
+    if not value:
+        return ""
+
+    value = str(value).lower().strip()
+
+    value = re.sub(r"\s+", " ", value)
+
+    return value
+
+
+def clean_boolean_keywords(value: str) -> str:
+    """
+    Clean GPT generated boolean keywords.
+
+    We intentionally keep boolean logic simple.
+
+    We allow OR.
+
+    We remove excessive AND usage because AND is one of the biggest
+    reasons a search becomes unnecessarily restrictive.
+    """
+
+    if not value:
+        return ""
+
+    value = str(value).strip()
+
+    # Remove newlines
+    value = value.replace("\n", " ")
+
+    # Normalize spaces
+    value = re.sub(r"\s+", " ", value)
+
+    # Convert lowercase boolean operators to uppercase
+    value = re.sub(r"\s+or\s+", " OR ", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+and\s+", " AND ", value, flags=re.IGNORECASE)
+
+    # Remove excessive AND chains.
+    #
+    # Example:
+    #
+    # Python AND FastAPI AND AWS AND Docker
+    #
+    # becomes:
+    #
+    # Python OR FastAPI OR AWS OR Docker
+    #
+    # This is intentionally conservative.
+    and_count = len(
+        re.findall(r"\bAND\b", value, flags=re.IGNORECASE)
+    )
+
+    if and_count >= 2:
+        parts = re.split(
+            r"\s+AND\s+",
+            value,
+            flags=re.IGNORECASE
+        )
+
+        parts = [
+            p.strip()
+            for p in parts
+            if p.strip()
+        ]
+
+        value = " OR ".join(parts)
+
+    return value
+
+
+def split_boolean_terms(value: str) -> list[str]:
+    """
+    Convert a boolean expression into individual terms.
+
+    Used for company-name sanitization.
+    """
+
+    if not value:
+        return []
+
+    parts = re.split(
+        r"\s+(?:OR|AND)\s+",
+        value,
+        flags=re.IGNORECASE
+    )
+
     cleaned = []
-    for lvl in levels or []:
-        lvl_lc = str(lvl).strip().lower()
-        if lvl_lc in SENIORITY_ALLOWED and lvl_lc not in cleaned:
-            cleaned.append(lvl_lc)
-        else:
-            print(f"  WARNING: dropping invalid seniority value '{lvl}'")
+
+    for part in parts:
+
+        part = part.strip()
+
+        part = part.strip('"')
+
+        if part:
+            cleaned.append(part)
+
     return cleaned
 
 
-# ---------------------------------------------------------------------------
-# 2) Payload building — priority is decided HERE, in code, not by the LLM.
-#    Everything defaults to CAN_HAVE. Only role gets MUST_HAVE, and only on
-#    the first attempt; the fallback ladder below downgrades it if needed.
-# ---------------------------------------------------------------------------
-def build_payload(extracted: dict, *, role_priority: str = "MUST_HAVE",
-                   include_skills: bool = True, include_company: bool = True,
-                   include_top_keywords: bool = True, include_location: bool = True,
-                   include_seniority: bool = False) -> dict:
-    """Resolve locations/companies to IDs and assemble the search payload.
+# =============================================================================
+# COMPANY SANITIZATION
+# =============================================================================
 
-    The keyword args are the loosening knobs used by search_with_fallback —
-    each one strips or downgrades a filter without needing a fresh OpenAI call.
+def remove_companies_from_keywords(
+    keywords: str,
+    companies: list
+) -> str:
     """
-    location_objs = []
-    if include_location:
-        for loc_name in extracted.get("locations", []):
-            resolved = resolve_id(loc_name, "LOCATION")
-            if resolved:
-                loc_id, loc_title = resolved
-                location_objs.append({"id": loc_id, "priority": "CAN_HAVE"})
-                print(f"  location '{loc_name}' -> {loc_title} ({loc_id})")
-            else:
-                print(f"  WARNING: no location match for '{loc_name}', skipping")
+    Defensive code-level protection.
 
-    company_objs = []
-    if include_company:
-        for company_name in extracted.get("preferred_companies", []):
-            resolved = resolve_id(company_name, "COMPANY")
-            if resolved:
-                comp_id, comp_title = resolved
-                company_objs.append({"id": comp_id, "priority": "CAN_HAVE"})
-                print(f"  company '{company_name}' -> {comp_title} ({comp_id})")
-            else:
-                print(f"  WARNING: no company match for '{company_name}', skipping")
+    If GPT accidentally puts company names inside role_keywords or
+    skills_keywords, remove those company names.
 
-    role_keywords = extracted.get("role_keywords") or extracted.get("title_keywords", "")
-    role_block = [
-        {
-            "keywords": role_keywords,
-            "priority": role_priority,
-            "scope": "CURRENT_OR_PAST",
-        }
-    ] if role_keywords else []
+    This does NOT depend on GPT obeying the prompt.
+    """
 
-    skills_block = [
-        {"keywords": extracted.get("skills_keywords", ""), "priority": "CAN_HAVE"}
-    ] if (include_skills and extracted.get("skills_keywords")) else []
+    if not keywords:
+        return ""
+
+    if not companies:
+        return keywords
+
+    result = keywords
+
+    for company in companies:
+
+        if not company:
+            continue
+
+        company = str(company).strip()
+
+        if not company:
+            continue
+
+        # Case-insensitive removal
+        pattern = re.compile(
+            re.escape(company),
+            re.IGNORECASE
+        )
+
+        result = pattern.sub("", result)
+
+    # Clean broken boolean expressions after removal
+    result = re.sub(
+        r"\s+(OR|AND)\s+(OR|AND)\s+",
+        " OR ",
+        result,
+        flags=re.IGNORECASE
+    )
+
+    result = re.sub(
+        r"^(OR|AND)\s+",
+        "",
+        result,
+        flags=re.IGNORECASE
+    )
+
+    result = re.sub(
+        r"\s+(OR|AND)$",
+        "",
+        result,
+        flags=re.IGNORECASE
+    )
+
+    result = re.sub(r"\s+", " ", result).strip()
+
+    return result
+
+
+# =============================================================================
+# LIMIT TERMS
+# =============================================================================
+
+def limit_boolean_terms(
+    keywords: str,
+    maximum: int
+) -> str:
+    """
+    Limit the number of OR terms.
+
+    This prevents GPT from creating giant search expressions.
+    """
+
+    if not keywords:
+        return ""
+
+    terms = split_boolean_terms(keywords)
+
+    if not terms:
+        return ""
+
+    terms = terms[:maximum]
+
+    return " OR ".join(
+        f'"{term}"' if " " in term else term
+        for term in terms
+    )
+
+
+# =============================================================================
+# LIST SANITIZATION
+# =============================================================================
+
+def clean_string_list(
+    values,
+    maximum: int
+) -> list[str]:
+
+    if not isinstance(values, list):
+        return []
+
+    result = []
+
+    seen = set()
+
+    for value in values:
+
+        if not value:
+            continue
+
+        value = str(value).strip()
+
+        if not value:
+            continue
+
+        normalized = normalize_text(value)
+
+        if normalized in seen:
+            continue
+
+        seen.add(normalized)
+
+        result.append(value)
+
+        if len(result) >= maximum:
+            break
+
+    return result
+
+
+# =============================================================================
+# SANITIZE GPT OUTPUT
+# =============================================================================
+
+def sanitize_extracted_params(
+    extracted: dict
+) -> dict:
+    """
+    Apply deterministic rules after GPT extraction.
+    """
+
+    if not isinstance(extracted, dict):
+        extracted = {}
+
+    companies = clean_string_list(
+        extracted.get("preferred_companies", []),
+        MAX_COMPANIES
+    )
+
+    locations = clean_string_list(
+        extracted.get("locations", []),
+        MAX_LOCATIONS
+    )
+
+    role_keywords = clean_boolean_keywords(
+        extracted.get("role_keywords", "")
+    )
+
+    skills_keywords = clean_boolean_keywords(
+        extracted.get("skills_keywords", "")
+    )
+
+    # ---------------------------------------------------------
+    # Remove companies from role and skills
+    # ---------------------------------------------------------
+
+    role_keywords = remove_companies_from_keywords(
+        role_keywords,
+        companies
+    )
+
+    skills_keywords = remove_companies_from_keywords(
+        skills_keywords,
+        companies
+    )
+
+    # ---------------------------------------------------------
+    # Limit number of title alternatives
+    # ---------------------------------------------------------
+
+    role_keywords = limit_boolean_terms(
+        role_keywords,
+        MAX_ROLE_TERMS
+    )
+
+    # ---------------------------------------------------------
+    # Limit number of skill alternatives
+    # ---------------------------------------------------------
+
+    skills_keywords = limit_boolean_terms(
+        skills_keywords,
+        MAX_SKILLS
+    )
+
+    # ---------------------------------------------------------
+    # Employment type
+    #
+    # Only keep it if GPT explicitly returned it.
+    # ---------------------------------------------------------
+
+    employment_type = clean_string_list(
+        extracted.get("employment_type", []),
+        5
+    )
+
+    return {
+        "role_keywords": role_keywords,
+        "skills_keywords": skills_keywords,
+        "locations": locations,
+        "preferred_companies": companies,
+        "employment_type": employment_type
+    }
+
+
+# =============================================================================
+# UNIPILE SEARCH PARAMETER RESOLUTION
+# =============================================================================
+
+def resolve_id(
+    keyword: str,
+    param_type: str
+) -> Optional[tuple[str, str]]:
+    """
+    Resolve a LinkedIn Recruiter search parameter to its ID.
+
+    We request up to 100 possible matches instead of blindly relying on
+    an arbitrary first result.
+
+    The best textual match is selected.
+    """
+
+    headers = {
+        "X-API-KEY": UNIPILE_API_KEY,
+        "accept": "application/json"
+    }
+
+    params = {
+        "keywords": keyword,
+        "type": param_type,
+        "service": "RECRUITER",
+        "account_id": UNIPILE_ACCOUNT_ID,
+        "limit": 100
+    }
+
+    response = requests.get(
+        UNIPILE_PARAMS_URL,
+        headers=headers,
+        params=params,
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    items = response.json().get("items", [])
+
+    if not items:
+        return None
+
+    target = normalize_text(keyword)
+
+    # ---------------------------------------------------------
+    # Exact title/name match first
+    # ---------------------------------------------------------
+
+    for item in items:
+
+        title = item.get("title", "")
+
+        if normalize_text(title) == target:
+
+            return (
+                str(item["id"]),
+                title
+            )
+
+    # ---------------------------------------------------------
+    # Partial match second
+    # ---------------------------------------------------------
+
+    for item in items:
+
+        title = item.get("title", "")
+
+        title_normalized = normalize_text(title)
+
+        if target in title_normalized or title_normalized in target:
+
+            return (
+                str(item["id"]),
+                title
+            )
+
+    # ---------------------------------------------------------
+    # Fallback to first result
+    # ---------------------------------------------------------
+
+    first = items[0]
+
+    return (
+        str(first["id"]),
+        first.get("title", "")
+    )
+
+
+# =============================================================================
+# RESOLVE LOCATIONS
+# =============================================================================
+
+def resolve_locations(
+    locations: list
+) -> list:
+
+    location_objects = []
+
+    for location_name in locations:
+
+        resolved = resolve_id(
+            location_name,
+            "LOCATION"
+        )
+
+        if not resolved:
+
+            print(
+                f"WARNING: Could not resolve location: "
+                f"{location_name}"
+            )
+
+            continue
+
+        location_id, location_title = resolved
+
+        location_objects.append(
+            {
+                "id": location_id,
+                "priority": "CAN_HAVE"
+            }
+        )
+
+        print(
+            f"Location: {location_name} "
+            f"-> {location_title} ({location_id})"
+        )
+
+    return location_objects
+
+
+# =============================================================================
+# RESOLVE COMPANIES
+# =============================================================================
+
+def resolve_companies(
+    companies: list
+) -> list:
+
+    company_objects = []
+
+    for company_name in companies:
+
+        resolved = resolve_id(
+            company_name,
+            "COMPANY"
+        )
+
+        if not resolved:
+
+            print(
+                f"WARNING: Could not resolve company: "
+                f"{company_name}"
+            )
+
+            continue
+
+        company_id, company_title = resolved
+
+        company_objects.append(
+            {
+                "id": company_id,
+                "priority": "CAN_HAVE"
+            }
+        )
+
+        print(
+            f"Company: {company_name} "
+            f"-> {company_title} ({company_id})"
+        )
+
+    return company_objects
+
+
+# =============================================================================
+# BUILD BASE PAYLOAD
+# =============================================================================
+
+def build_payload(
+    extracted: dict
+) -> dict:
+
+    extracted = sanitize_extracted_params(
+        extracted
+    )
+
+    print("\nSanitized extraction:")
+    print(
+        json.dumps(
+            extracted,
+            indent=2
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Resolve locations
+    # ---------------------------------------------------------
+
+    location_objects = resolve_locations(
+        extracted.get("locations", [])
+    )
+
+    # ---------------------------------------------------------
+    # Resolve companies
+    # ---------------------------------------------------------
+
+    company_objects = resolve_companies(
+        extracted.get("preferred_companies", [])
+    )
+
+    # ---------------------------------------------------------
+    # Role
+    #
+    # IMPORTANT:
+    #
+    # CAN_HAVE instead of MUST_HAVE.
+    #
+    # This is intentional.
+    # ---------------------------------------------------------
+
+    role_keywords = extracted.get(
+        "role_keywords",
+        ""
+    )
+
+    role_objects = []
+
+    if role_keywords:
+
+        role_objects.append(
+            {
+                "keywords": role_keywords,
+                "priority": "CAN_HAVE",
+                "scope": "CURRENT_OR_PAST"
+            }
+        )
+
+    # ---------------------------------------------------------
+    # Skills
+    #
+    # Also CAN_HAVE.
+    # ---------------------------------------------------------
+
+    skills_keywords = extracted.get(
+        "skills_keywords",
+        ""
+    )
+
+    skills_objects = []
+
+    if skills_keywords:
+
+        skills_objects.append(
+            {
+                "keywords": skills_keywords,
+                "priority": "CAN_HAVE"
+            }
+        )
+
+    # ---------------------------------------------------------
+    # Base payload
+    #
+    # Notice:
+    #
+    # NO top-level "keywords"
+    # NO seniority
+    # NO automatic employment_type
+    # ---------------------------------------------------------
 
     payload = {
         "api": "recruiter",
-        "category": "people",
-        # The "role" field (above) already carries the title signal, falling
-        # back to title_keywords whenever role_keywords is empty. So if
-        # role_block ended up populated at all, the top-level "keywords"
-        # filter would just be restating the same string as a SECOND,
-        # independently-ANDed filter — that's the exact bug that produced
-        # 0/1-result searches (e.g. "Zoho Developer" in both places at
-        # once). Top-level "keywords" is only ever sent when role_block is
-        # genuinely empty, which in practice means there was no title
-        # signal to send there either.
-        "keywords": extracted.get("title_keywords", "") if (include_top_keywords and not role_block) else "",
-        "role": role_block,
-        "skills": skills_block,
-        "location": location_objs,
-        "current_company": company_objs,
-        "past_company": company_objs,
-        "employment_type": extracted.get("employment_type", ["FULL_TIME"]),
+        "category": "people"
     }
 
-    if include_seniority:
-        seniority_levels = sanitize_seniority(extracted.get("seniority_levels", []))
-        if seniority_levels:
-            payload["seniority"] = {"include": seniority_levels}
+    if role_objects:
 
-    # Drop empty lists/strings so we don't send noisy filters
-    return {k: v for k, v in payload.items() if v not in ("", [], None)}
+        payload["role"] = role_objects
+
+    if skills_objects:
+
+        payload["skills"] = skills_objects
+
+    if location_objects:
+
+        payload["location"] = location_objects
+
+    if company_objects:
+
+        payload["current_company"] = company_objects
+
+        payload["past_company"] = company_objects
+
+    # Only include employment type when explicitly provided.
+    employment_type = extracted.get(
+        "employment_type",
+        []
+    )
+
+    if employment_type:
+
+        payload["employment_type"] = employment_type
+
+    return payload
 
 
-def run_search(payload: dict, limit: int = 100) -> dict:
-    """POST the assembled payload to the Unipile LinkedIn Recruiter search endpoint.
+# =============================================================================
+# PAYLOAD RELAXATION
+# =============================================================================
 
-    limit defaults to 100 — the documented max for Recruiter/Sales Navigator
-    (Classic search caps lower, around 50). The default of 10 was silently
-    truncating result pages; this doesn't change how many candidates LinkedIn
-    actually has (that's paging.total_count), but stops under-fetching when
-    there ARE more than 10 to return.
+def create_relaxed_payloads(
+    base_payload: dict
+) -> list[tuple[str, dict]]:
     """
+    Create progressively broader searches.
+
+    This is the important safety mechanism.
+
+    Instead of accepting:
+
+        0 candidates
+
+    we progressively remove optional restrictions.
+
+    Search sequence:
+
+        1. Role + location + company + skills
+        2. Role + location + company
+        3. Role + location
+        4. Role only
+        5. Broad role alternatives
+
+    Every step remains relevant to the job.
+    """
+
+    payloads = []
+
+    # -------------------------------------------------------------------------
+    # SEARCH 1
+    # Original broad search
+    # -------------------------------------------------------------------------
+
+    payloads.append(
+        (
+            "BASE",
+            json.loads(
+                json.dumps(base_payload)
+            )
+        )
+    )
+
+    # -------------------------------------------------------------------------
+    # SEARCH 2
+    # Remove skills
+    # -------------------------------------------------------------------------
+
+    p2 = json.loads(
+        json.dumps(base_payload)
+    )
+
+    p2.pop(
+        "skills",
+        None
+    )
+
+    payloads.append(
+        (
+            "WITHOUT_SKILLS",
+            p2
+        )
+    )
+
+    # -------------------------------------------------------------------------
+    # SEARCH 3
+    # Remove companies
+    # -------------------------------------------------------------------------
+
+    p3 = json.loads(
+        json.dumps(p2)
+    )
+
+    p3.pop(
+        "current_company",
+        None
+    )
+
+    p3.pop(
+        "past_company",
+        None
+    )
+
+    payloads.append(
+        (
+            "WITHOUT_SKILLS_AND_COMPANIES",
+            p3
+        )
+    )
+
+    # -------------------------------------------------------------------------
+    # SEARCH 4
+    # Remove location
+    # -------------------------------------------------------------------------
+
+    p4 = json.loads(
+        json.dumps(p3)
+    )
+
+    p4.pop(
+        "location",
+        None
+    )
+
+    payloads.append(
+        (
+            "ROLE_ONLY",
+            p4
+        )
+    )
+
+    # -------------------------------------------------------------------------
+    # SEARCH 5
+    #
+    # Keep only role but simplify the role expression.
+    # -------------------------------------------------------------------------
+
+    p5 = json.loads(
+        json.dumps(p4)
+    )
+
+    if "role" in p5:
+
+        role = p5["role"]
+
+        if role:
+
+            original_keywords = role[0].get(
+                "keywords",
+                ""
+            )
+
+            terms = split_boolean_terms(
+                original_keywords
+            )
+
+            # Keep only the first 3 broadest title alternatives.
+            terms = terms[:3]
+
+            if terms:
+
+                role[0]["keywords"] = (
+                    " OR ".join(
+                        terms
+                    )
+                )
+
+    payloads.append(
+        (
+            "SIMPLIFIED_ROLE",
+            p5
+        )
+    )
+
+    return payloads
+
+
+# =============================================================================
+# RUN ONE UNIPILE SEARCH
+# =============================================================================
+
+def run_search(
+    payload: dict,
+    limit: int = SEARCH_LIMIT
+) -> dict:
+    """
+    Execute one Recruiter search.
+    """
+
     headers = {
         "X-API-KEY": UNIPILE_API_KEY,
         "accept": "application/json",
-        "content-type": "application/json",
+        "content-type": "application/json"
     }
-    params = {"account_id": UNIPILE_ACCOUNT_ID, "limit": limit}
-    resp = requests.post(UNIPILE_SEARCH_URL, headers=headers, params=params, json=payload, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
+
+    params = {
+        "account_id": UNIPILE_ACCOUNT_ID,
+        "limit": limit
+    }
+
+    response = requests.post(
+        UNIPILE_SEARCH_URL,
+        headers=headers,
+        params=params,
+        json=payload,
+        timeout=60
+    )
+
+    response.raise_for_status()
+
+    return response.json()
 
 
-def _result_count(result: dict) -> int:
-    # Unipile returns paginated results; total count is the reliable signal
-    # of whether the search is too narrow, independent of `limit`.
-    return result.get("paging", {}).get("total_count", len(result.get("items", [])))
+# =============================================================================
+# EXTRACT RESULT COUNT
+# =============================================================================
+
+def get_result_count(
+    result: dict
+) -> int:
+    """
+    Safely determine the number of returned candidates.
+    """
+
+    # Common possibilities
+    for key in [
+        "items",
+        "results",
+        "data"
+    ]:
+
+        value = result.get(key)
+
+        if isinstance(value, list):
+
+            return len(value)
+
+    # Some Unipile responses expose paging information.
+    paging = result.get(
+        "paging",
+        {}
+    )
+
+    if isinstance(paging, dict):
+
+        total_count = paging.get(
+            "total_count"
+        )
+
+        if isinstance(total_count, int):
+
+            return total_count
+
+    return 0
 
 
-# ---------------------------------------------------------------------------
-# 3) Automatic fallback ladder — if a search comes back empty, progressively
-#    loosen the SAME extracted parameters (no extra OpenAI calls) and retry.
-#    Each rung removes exactly one source of over-constraint. First non-empty
-#    rung wins; if every rung is empty, return the broadest attempt with a
-#    clear note so it's visible in logs rather than silently "0 candidates".
-# ---------------------------------------------------------------------------
-def search_with_fallback(extracted: dict) -> dict:
-    ladder = [
-        ("full payload (role=MUST_HAVE)", dict(role_priority="MUST_HAVE")),
-        ("drop skills filter", dict(role_priority="MUST_HAVE", include_skills=False)),
-        ("role downgraded to CAN_HAVE", dict(role_priority="CAN_HAVE", include_skills=False)),
-        ("drop company filter", dict(role_priority="CAN_HAVE", include_skills=False, include_company=False)),
-        ("role keywords only, no location", dict(role_priority="CAN_HAVE", include_skills=False,
-                                                   include_company=False, include_location=False)),
-    ]
+# =============================================================================
+# MAIN SEARCH WITH AUTOMATIC RELAXATION
+# =============================================================================
 
-    last_result = None
-    last_payload = None
-    for label, kwargs in ladder:
-        payload = build_payload(extracted, **kwargs)
-        print(f"\nAttempt [{label}]:")
-        print(json.dumps(payload, indent=2))
-        result = run_search(payload)
-        count = _result_count(result)
-        print(f"  -> {count} total candidates")
-        last_result, last_payload = result, payload
+def search_with_fallbacks(
+    base_payload: dict
+) -> dict:
+    """
+    Run progressively relaxed searches until useful results are found.
+
+    This prevents an overly strict payload from permanently producing
+    zero candidates.
+    """
+
+    payload_variations = create_relaxed_payloads(
+        base_payload
+    )
+
+    last_result = {}
+
+    for search_name, payload in payload_variations:
+
+        print("\n" + "=" * 80)
+        print(
+            f"RUNNING SEARCH: {search_name}"
+        )
+        print("=" * 80)
+
+        print(
+            json.dumps(
+                payload,
+                indent=2
+            )
+        )
+
+        try:
+
+            result = run_search(
+                payload,
+                limit=SEARCH_LIMIT
+            )
+
+        except requests.HTTPError as exc:
+
+            print(
+                f"Search failed for {search_name}: "
+                f"{exc}"
+            )
+
+            continue
+
+        last_result = result
+
+        count = get_result_count(
+            result
+        )
+
+        print(
+            f"Returned candidates: {count}"
+        )
+
+        # -------------------------------------------------------------
+        # SUCCESS
+        # -------------------------------------------------------------
+
         if count > 0:
-            result["_fallback_step"] = label
-            result["_payload_used"] = payload
-            return result
 
-    print("\nWARNING: every fallback rung returned 0 candidates. "
-          "The JD's own criteria may genuinely be too niche for this LinkedIn "
-          "account's network/plan — worth checking manually.")
-    last_result["_fallback_step"] = "exhausted all rungs, still 0"
-    last_result["_payload_used"] = last_payload
-    return last_result
+            print(
+                f"\nSUCCESS: {count} candidates "
+                f"found using {search_name}"
+            )
+
+            return {
+                "search_strategy": search_name,
+                "payload": payload,
+                "result": result
+            }
+
+        print(
+            f"No candidates found using "
+            f"{search_name}. Relaxing search..."
+        )
+
+    # -----------------------------------------------------------------
+    # All searches returned zero.
+    #
+    # We return the final result rather than inventing candidates.
+    # -----------------------------------------------------------------
+
+    print(
+        "\nWARNING: All fallback searches "
+        "returned zero candidates."
+    )
+
+    return {
+        "search_strategy": "ALL_SEARCHES_ZERO",
+        "payload": payload_variations[-1][1],
+        "result": last_result
+    }
 
 
-def run_pipeline_v2(jd_text: str) -> dict:
-    """Full pipeline: JD text -> OpenAI extraction -> ID resolution -> search (with fallback)."""
-    print("Extracting search parameters from JD via OpenAI...")
-    extracted = extract_search_params(jd_text)
-    print(json.dumps(extracted, indent=2))
+# =============================================================================
+# COMPLETE PIPELINE
+# =============================================================================
 
-    print("\nRunning LinkedIn Recruiter search with automatic loosening on 0 results...")
-    result = search_with_fallback(extracted)
-    print(f"\nFinal: used rung '{result.get('_fallback_step')}'")
+def run_pipeline_v2(
+    jd_text: str
+) -> dict:
+
+    # -------------------------------------------------------------------------
+    # STEP 1
+    # -------------------------------------------------------------------------
+
+    print(
+        "\n"
+        + "=" * 80
+    )
+
+    print(
+        "STEP 1: Extracting broad search parameters"
+    )
+
+    print(
+        "=" * 80
+    )
+
+    extracted = extract_search_params(
+        jd_text
+    )
+
+    print(
+        json.dumps(
+            extracted,
+            indent=2
+        )
+    )
+
+    # -------------------------------------------------------------------------
+    # STEP 2
+    # -------------------------------------------------------------------------
+
+    print(
+        "\n"
+        + "=" * 80
+    )
+
+    print(
+        "STEP 2: Building safe Recruiter payload"
+    )
+
+    print(
+        "=" * 80
+    )
+
+    payload = build_payload(
+        extracted
+    )
+
+    print(
+        "\nFINAL BASE PAYLOAD:"
+    )
+
+    print(
+        json.dumps(
+            payload,
+            indent=2
+        )
+    )
+
+    # -------------------------------------------------------------------------
+    # STEP 3
+    # -------------------------------------------------------------------------
+
+    print(
+        "\n"
+        + "=" * 80
+    )
+
+    print(
+        "STEP 3: Running Recruiter search with "
+        "automatic relaxation"
+    )
+
+    print(
+        "=" * 80
+    )
+
+    result = search_with_fallbacks(
+        payload
+    )
+
     return result
+
+
+# =============================================================================
+# OPTIONAL TEST
+# =============================================================================
+
+if __name__ == "__main__":
+
+    jd = """
+    We are looking for a Python Backend Developer with 4-6 years
+    of experience.
+
+    The candidate should have experience with Python, FastAPI,
+    Django, PostgreSQL, AWS and Docker.
+
+    Experience working at companies such as Microsoft, Google,
+    Amazon or similar technology companies is preferred.
+
+    Location: New York, San Francisco or Seattle.
+
+    The candidate should have strong backend development experience
+    and experience building scalable APIs and microservices.
+    """
+
+    result = run_pipeline_v2(
+        jd
+    )
+
+    print(
+        "\n"
+        + "=" * 80
+    )
+
+    print(
+        "FINAL RESULT"
+    )
+
+    print(
+        "=" * 80
+    )
+
+    print(
+        json.dumps(
+            result,
+            indent=2
+        )
+    )
