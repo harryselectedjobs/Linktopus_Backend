@@ -1,33 +1,3 @@
-"""
-jd_generator.py
-
-ONE OpenAI call does everything:
-  - Reads the user's layman hiring requirement.
-  - If required info is missing -> returns missing_fields + message.
-  - If complete -> writes the full JD, and for every company the user
-    mentioned, adds up to 5 similar/peer companies directly into the
-    "Preferred Company Background" section.
-
-Required information:
-    - title_keywords
-    - role_keywords
-    - skills_keywords
-    - locations
-    - preferred_companies   (or an explicit "no preference")
-
-Usage:
-    from jd_generator import generate_job_description
-
-    result = generate_job_description(user_input)
-    if "jd_text" in result:
-        print(result["jd_text"])
-    else:
-        print(result["message"])
-
-Required environment variable:
-    OPENAI_API_KEY
-"""
-
 import os
 import json
 import requests
@@ -126,6 +96,7 @@ When writing jd_text:
 Return ONLY valid JSON. No markdown fences, no commentary, no extra fields.
 """
 
+
 def generate_job_description(user_input: str) -> dict:
     """
     Single OpenAI call: understand the requirement, check completeness,
@@ -151,36 +122,8 @@ def generate_job_description(user_input: str) -> dict:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_input.strip()},
         ],
-        "temperature": 0.3,  # slightly lowered for more consistent factual output
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "job_description_response",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "status": {
-                            "type": "string",
-                            "enum": ["complete", "incomplete"],
-                        },
-                        "jd_text": {"type": "string"},
-                        "missing_fields": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
-                        "message": {"type": "string"},
-                    },
-                    "required": [
-                        "status",
-                        "jd_text",
-                        "missing_fields",
-                        "message",
-                    ],
-                    "additionalProperties": False,
-                },
-            },
-        },
+        "temperature": 0.4,
+        "response_format": {"type": "json_object"},
     }
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -201,4 +144,3 @@ def generate_job_description(user_input: str) -> dict:
         f"Please provide more information about: {', '.join(missing) if missing else 'title, role, skills, location, and preferred companies'}.",
     )
     return {"missing_fields": missing, "message": message}
-
