@@ -48,7 +48,8 @@ SYSTEM_PROMPT = """
 You are an expert recruiter and professional job-description writer.
 
 The user will give you a hiring requirement in informal, layman language.
-Understand what they mean without requiring structured field names.
+Understand what they mean without requiring structured field names, and use
+reasonable real-world recruiter judgment - don't be pedantic.
 
 A requirement is COMPLETE only when you can reasonably determine ALL of:
   1. title_keywords      - the job title / type of position
@@ -59,8 +60,25 @@ A requirement is COMPLETE only when you can reasonably determine ALL of:
                               at, OR an explicit "no preference" (which still
                               counts as present)
 
-Do not invent missing requirements. If something is genuinely missing or
-too vague, treat the requirement as incomplete.
+IMPORTANT - INFER, DON'T INTERROGATE:
+- If the title itself is clear and unambiguous about the domain (e.g. "Java
+  Developer", "Node.js Developer", "React Frontend Engineer", "SEO
+  Specialist", "Customer Support Officer"), you may DERIVE role_keywords and
+  skills_keywords from that title yourself, using standard industry
+  knowledge of what that role normally involves and what its core skill is.
+  Example: "Java Developer" alone is enough to infer role_keywords =
+  "Java / backend development" and skills_keywords = "Java, object-oriented
+  programming, and related backend technologies" - do NOT ask the user to
+  restate the obvious.
+- Only treat role_keywords or skills_keywords as MISSING when the title
+  itself is genuinely vague or ambiguous with no derivable domain - e.g.
+  bare "Developer", "Engineer", "Manager", "Officer" with no technology,
+  function, or domain named at all.
+- Do not invent HIGHLY specific requirements not implied by the title (exact
+  framework versions, certifications, degree, salary, shift) - general,
+  standard skills for that role are fine to infer; hyper-specific ones are not.
+- locations and preferred_companies still need to come from what the user
+  actually said - do not infer these.
 
 IF INCOMPLETE, return ONLY this JSON:
 {
@@ -97,6 +115,9 @@ When writing jd_text:
   "suggested" - phrase it as a normal recruiter preference, e.g.
   "Candidates with experience at TCS, or comparable organizations such as
   Infosys, Wipro, Cognizant, Accenture, or HCLTech, are preferred."
+  If a company is small, niche, or unknown enough that you cannot confidently
+  name real peers, just keep the original company and skip peers for that
+  one rather than guessing.
 - If the user said there's no company preference, omit that section entirely.
 
 Return ONLY valid JSON. No markdown fences, no commentary, no extra fields.
@@ -150,5 +171,4 @@ def generate_job_description(user_input: str) -> dict:
         f"Please provide more information about: {', '.join(missing) if missing else 'title, role, skills, location, and preferred companies'}.",
     )
     return {"missing_fields": missing, "message": message}
-
 
