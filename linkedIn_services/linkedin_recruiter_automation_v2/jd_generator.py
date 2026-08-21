@@ -56,8 +56,8 @@ A requirement is COMPLETE only when you can reasonably determine ALL of:
   2. role_keywords        - what the person will actually do / function
   3. skills_keywords       - specific skills, tools, or competencies required
   4. locations             - at least one city, region, or remote status
-  5. preferred_companies   - a company they want candidates to have worked
-                              at, OR an explicit "no preference" (which still
+  5. preferred_companies   - explicit company names, an industry domain/type,
+                              OR an explicit "no preference" (which still
                               counts as present)
 
 IMPORTANT - INFER, DON'T INTERROGATE:
@@ -101,28 +101,30 @@ When writing jd_text:
   certifications, degree, shift, tech stack) that weren't stated or clearly
   implied by the role.
 - Structure: Job Title, About the Role, Key Responsibilities, Required
-  Skills/Qualifications, Experience, Location, Preferred Company Background
-  (only if companies were mentioned), Additional Requirements (if any).
-- COMPANY EXPANSION (do this inline, do not skip it): for EVERY company the
-  user mentioned, identify up to 5 genuinely similar/peer companies - same
-  or closely related industry, similar business model, size, and prestige
-  (e.g. EY -> Deloitte, PwC, KPMG, Accenture, BDO; TCS -> Infosys, Wipro,
-  Cognizant, Accenture, HCLTech). If the user named several companies from
-  different industries, expand EACH one separately - do not skip any.
-  Weave the ORIGINAL companies plus ALL their similar companies naturally
-  into the "Preferred Company Background" section, by name, with no
-  omissions. Do not mention that these were "generated", "expanded", or
-  "suggested" - phrase it as a normal recruiter preference, e.g.
-  "Candidates with experience at TCS, or comparable organizations such as
-  Infosys, Wipro, Cognizant, Accenture, or HCLTech, are preferred."
-  If a company is small, niche, or unknown enough that you cannot confidently
-  name real peers, just keep the original company and skip peers for that
-  one rather than guessing.
-- If the user said there's no company preference, omit that section entirely.
+  Skills/Qualifications, Experience, Location, Preferred Company Background,
+  Additional Requirements (if any).
+
+- MANDATORY LOCATION EXPANSION RULE:
+  You MUST ALWAYS output concrete, named cities.
+  1. IF CITIES ARE MENTIONED: Use them directly.
+  2. IF A STATE, REGION, OR ZONE IS MENTIONED (e.g., "Jharkhand", "Texas", "East Coast", "Bay Area"):
+     You MUST identify and explicitly name 3 to 5 major cities or commercial hubs in that area. 
+     Example for "Jharkhand": Write "Jharkhand (including major hubs such as Ranchi, Bokaro, Jamshedpur, or Dhanbad)".
+     Never output just a state/region name alone without naming key cities.
+
+- MANDATORY COMPANY LISTING RULE (STRICT):
+  NEVER write generic phrases like "or comparable organizations" or "leading companies in the industry" without listing explicit company names. You MUST roll out actual company names in EVERY completion, unless the user explicitly requested "no preference".
+
+  1. IF SPECIFIC COMPANIES WERE NAMED:
+     Name the original companies PLUS up to 5 peer companies in the same tier/industry.
+  2. IF NO SPECIFIC COMPANY WAS NAMED (or only a domain/industry was given):
+     Identify the domain (SaaS, FinTech, E-commerce, Consulting, Banking, etc.) and explicitly name 4 to 5 top-tier industry benchmark companies for that role.
+
+  Formatting Pattern (Always name explicit companies):
+  "Preferred Company Background: Candidates with experience at [Company A], [Company B], [Company C], [Company D], or [Company E] are strongly preferred."
 
 Return ONLY valid JSON. No markdown fences, no commentary, no extra fields.
 """
-
 
 def generate_job_description(user_input: str) -> dict:
     """
@@ -149,8 +151,36 @@ def generate_job_description(user_input: str) -> dict:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_input.strip()},
         ],
-        "temperature": 0.4,
-        "response_format": {"type": "json_object"},
+        "temperature": 0.3,  # slightly lowered for more consistent factual output
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "job_description_response",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["complete", "incomplete"],
+                        },
+                        "jd_text": {"type": "string"},
+                        "missing_fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "message": {"type": "string"},
+                    },
+                    "required": [
+                        "status",
+                        "jd_text",
+                        "missing_fields",
+                        "message",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+        },
     }
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",

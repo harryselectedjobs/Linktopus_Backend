@@ -20,21 +20,38 @@ SENIORITY_ALLOWED = [
 ]
 
 # ---------------------------------------------------------------------------
-# 1) Extraction prompt — rewritten to teach GPT the Unipile Recruiter schema
-#    and, critically, to bias toward BROAD boolean strings and to NOT decide
-#    priority itself. Priority (CAN_HAVE vs MUST_HAVE) is decided in code
-#    below, where it can be controlled and progressively loosened. Letting
-#    the LLM freely choose MUST_HAVE per field is exactly what was producing
-#    over-constrained, zero-result payloads.
+# 1) Extraction prompt — three fields (keywords / role_keywords / skills_keywords)
+#    each with a distinct, non-overlapping job, matching Unipile's own framing:
+#    "keywords" searches broadly across the profile, "role" focuses on job
+#    titles, and "skills" targets listed competencies. Priority (CAN_HAVE vs
+#    MUST_HAVE) is decided in code below, not by the LLM — that's what lets
+#    the fallback ladder progressively loosen a search without a fresh call.
 # ---------------------------------------------------------------------------
 EXTRACTION_SYSTEM_PROMPT = f"""You are a technical recruiter assistant. Given a job description,
 extract structured LinkedIn Recruiter search parameters. Respond with ONLY valid JSON
 (no markdown fences, no commentary) matching exactly this schema:
 
 {{
-  "title_keywords": "a SHORT boolean string of 2-4 title variants joined with OR, e.g. \\"Backend Engineer\\" OR \\"Software Engineer\\" OR \\"Platform Engineer\\". Never chain more than one AND in this string. NEVER include a company name in this field — 'Zoho Developer' is WRONG (it forces the literal phrase 'Zoho Developer' and matches almost nobody); the correct extraction is title_keywords: \\"Developer\\" OR \\"Software Engineer\\" OR \\"Software Developer\\" together with preferred_companies: [\\"Zoho\\"]. Company names belong ONLY in preferred_companies, never in title_keywords, role_keywords, or skills_keywords.",
-  "role_keywords": "leave this EMPTY STRING unless the JD needs functional-role matching that title_keywords doesn't already cover. Do not restate the same terms as title_keywords — that double-filters and causes 0 results. Same company-name rule applies here as title_keywords.",
-  "skills_keywords": "at most 2-3 CORE skills joined with OR, not AND. Only include a skill here if a candidate missing it would clearly be unqualified. Do not list every technology mentioned in the JD — that stacks filters and eliminates otherwise-good candidates.",
+  "keywords": "broad free-text signal that searches the WHOLE profile — domain/industry
+    context, tools mentioned only in passing, methodologies, certifications. 1-2 terms,
+    OR'd if more than one, e.g. \\"fintech\\" OR \\"payments\\". NEVER put a job title here
+    (that belongs in role_keywords) and NEVER put a listed competency here (that belongs
+    in skills_keywords). Leave empty if there's nothing broad and distinct left to say
+    after role_keywords and skills_keywords are filled — do not restate them here.",
+
+  "role_keywords": "2-4 job TITLE variants only, OR'd, e.g. \\"Backend Engineer\\" OR
+    \\"Software Engineer\\" OR \\"Platform Engineer\\". At most one AND in this string, and
+    only if the JD explicitly requires two title concepts together. NEVER include a company
+    name — 'Zoho Developer' is WRONG (it forces the literal phrase 'Zoho Developer' and
+    matches almost nobody); the correct extraction is role_keywords: \\"Developer\\" OR
+    \\"Software Engineer\\" together with preferred_companies: [\\"Zoho\\"]. Company names
+    belong ONLY in preferred_companies, never in keywords, role_keywords, or skills_keywords.",
+
+  "skills_keywords": "at most 2-3 CORE listed competencies, OR'd, not AND. Only include a
+    skill here if a candidate missing it would clearly be unqualified. Do not list every
+    technology mentioned in the JD — that stacks filters and eliminates otherwise-good
+    candidates. Do not repeat anything already captured in role_keywords.",
+
   "locations": ["city or region name — only what's explicitly stated, max 3"],
   "preferred_companies": ["Company Name — ONLY if the JD explicitly says target/poach from these companies. Do not infer companies from industry context."],
   "seniority_levels": ["optional. LOWERCASE ONLY, chosen strictly from this fixed set: {', '.join(SENIORITY_ALLOWED)}. Leave empty unless the JD is explicit about seniority — this filter is a common cause of 0 results when guessed."],
@@ -45,7 +62,11 @@ CRITICAL RULES TO AVOID ZERO-RESULT SEARCHES:
 - Prefer OR over AND everywhere. A boolean string like "A" AND "B" AND "C" requires all
   three literally in the profile text and very often matches nobody. "A" OR "B" OR "C" is
   almost always what's actually wanted (candidate could be described any of those ways).
-- Do NOT put the same concept in both title_keywords and role_keywords. Pick one.
+- keywords / role_keywords / skills_keywords must NOT overlap. Each concept from the JD
+  goes in exactly ONE of the three fields — pick the single best fit: job title ->
+  role_keywords, listed competency -> skills_keywords, everything else broad/contextual ->
+  keywords. Never restate the same term across two fields — that double-filters the same
+  concept and is a common cause of 0 results.
 - Keep skills_keywords short. 6 ANDed or even 6 separately-required skills filters is a
   near-guaranteed 0-candidate search on real LinkedIn data.
 - Only include locations/companies/seniority that are explicitly named or unambiguous in
@@ -65,9 +86,10 @@ def sanitize_extracted_keywords(extracted: dict) -> dict:
     mistake even with an explicit rule + worked example in the system
     prompt), so this checks the extraction after the fact and fixes it.
 
-    Only triggers on a plain 2-3 word phrase with NO boolean operators
-    (i.e. it doesn't look like an intentional OR list already) — anything
-    already boolean-formed is left untouched.
+    Runs on keywords, role_keywords, and skills_keywords. Only triggers on a
+    plain 2-3 word phrase with NO boolean operators (i.e. it doesn't look
+    like an intentional OR list already) — anything already boolean-formed
+    is left untouched.
     """
     GENERIC_ROLE_WORDS = {
         "developer", "engineer", "manager", "architect", "analyst",
@@ -99,10 +121,43 @@ def sanitize_extracted_keywords(extracted: dict) -> dict:
             companies.append(comp_title)
         return role_word
 
-    for field in ("title_keywords", "role_keywords"):
+    for field in ("keywords", "role_keywords", "skills_keywords"):
         cleaned = _split(extracted.get(field, ""))
         if cleaned is not None:
             extracted[field] = cleaned
+
+    return extracted
+
+
+def dedupe_across_fields(extracted: dict) -> dict:
+    """
+    Belt-and-suspenders against field overlap: if the LLM puts the same bare
+    term in more than one of keywords / role_keywords / skills_keywords
+    despite the prompt rule, that term gets ANDed against itself across two
+    independent filters — the same over-constraint failure mode as the
+    current_company/past_company bug, just at the keyword level. Keep the
+    term only in the more specific field (role > skills > keywords) and
+    strip it from the broader one rather than sending both.
+    """
+    def _terms(s: str) -> set[str]:
+        return {
+            w.strip('"').lower()
+            for w in s.replace(" OR ", " ").replace(" AND ", " ").split()
+        }
+
+    role_terms = _terms(extracted.get("role_keywords", ""))
+    skills_terms = _terms(extracted.get("skills_keywords", ""))
+
+    kw = extracted.get("keywords", "")
+    if kw and _terms(kw) & (role_terms | skills_terms):
+        print(f"  NOTE: dropping 'keywords' ({kw!r}) — overlaps role/skills, would double-filter")
+        extracted["keywords"] = ""
+
+    if extracted.get("role_keywords") and extracted.get("skills_keywords"):
+        if role_terms & skills_terms:
+            print(f"  NOTE: dropping 'skills_keywords' ({extracted['skills_keywords']!r}) "
+                  f"— overlaps role_keywords, would double-filter")
+            extracted["skills_keywords"] = ""
 
     return extracted
 
@@ -172,12 +227,21 @@ def sanitize_seniority(levels: list) -> list:
 
 # ---------------------------------------------------------------------------
 # 2) Payload building — priority is decided HERE, in code, not by the LLM.
-#    Everything defaults to CAN_HAVE. Only role gets MUST_HAVE, and only on
+#    location and company default to CAN_HAVE (never MUST_HAVE — profiles are
+#    often incomplete/stale on these fields, so hard-requiring them silently
+#    kills otherwise-good candidates). Only role gets MUST_HAVE, and only on
 #    the first attempt; the fallback ladder below downgrades it if needed.
+#
+#    Company uses a single "company" filter with scope=CURRENT_OR_PAST rather
+#    than setting BOTH current_company and past_company to the same list.
+#    Those are two independent top-level filters that AND together, so
+#    populating both with the same company demanded "works there now AND
+#    worked there before" simultaneously — impossible for one company, and a
+#    silent, invisible source of over-narrowed/0-result searches.
 # ---------------------------------------------------------------------------
 def build_payload(extracted: dict, *, role_priority: str = "MUST_HAVE",
                    include_skills: bool = True, include_company: bool = True,
-                   include_top_keywords: bool = True, include_location: bool = True,
+                   include_keywords: bool = True, include_location: bool = True,
                    include_seniority: bool = False) -> dict:
     """Resolve locations/companies to IDs and assemble the search payload.
 
@@ -201,19 +265,24 @@ def build_payload(extracted: dict, *, role_priority: str = "MUST_HAVE",
             resolved = resolve_id(company_name, "COMPANY")
             if resolved:
                 comp_id, comp_title = resolved
-                company_objs.append({"id": comp_id, "priority": "CAN_HAVE"})
+                # Single "company" filter, either era. NOT current_company +
+                # past_company with the same list — see note above.
+                company_objs.append({
+                    "id": comp_id,
+                    "priority": "CAN_HAVE",
+                    "scope": "CURRENT_OR_PAST",
+                })
                 print(f"  company '{company_name}' -> {comp_title} ({comp_id})")
             else:
                 print(f"  WARNING: no company match for '{company_name}', skipping")
 
-    role_keywords = extracted.get("role_keywords") or extracted.get("title_keywords", "")
     role_block = [
         {
-            "keywords": role_keywords,
+            "keywords": extracted.get("role_keywords", ""),
             "priority": role_priority,
             "scope": "CURRENT_OR_PAST",
         }
-    ] if role_keywords else []
+    ] if extracted.get("role_keywords") else []
 
     skills_block = [
         {"keywords": extracted.get("skills_keywords", ""), "priority": "CAN_HAVE"}
@@ -222,21 +291,14 @@ def build_payload(extracted: dict, *, role_priority: str = "MUST_HAVE",
     payload = {
         "api": "recruiter",
         "category": "people",
-        # The "role" field (above) already carries the title signal, falling
-        # back to title_keywords whenever role_keywords is empty. So if
-        # role_block ended up populated at all, the top-level "keywords"
-        # filter would just be restating the same string as a SECOND,
-        # independently-ANDed filter — that's the exact bug that produced
-        # 0/1-result searches (e.g. "Zoho Developer" in both places at
-        # once). Top-level "keywords" is only ever sent when role_block is
-        # genuinely empty, which in practice means there was no title
-        # signal to send there either.
-        "keywords": extracted.get("title_keywords", "") if (include_top_keywords and not role_block) else "",
+        # keywords now carries its own distinct content (broad profile-text
+        # signal, not a restatement of role/skills) — see extraction prompt
+        # and dedupe_across_fields. It is no longer a spillover of role.
+        "keywords": extracted.get("keywords", "") if include_keywords else "",
         "role": role_block,
         "skills": skills_block,
         "location": location_objs,
-        "current_company": company_objs,
-        "past_company": company_objs,
+        "company": company_objs,
         "employment_type": extracted.get("employment_type", ["FULL_TIME"]),
     }
 
@@ -287,9 +349,13 @@ def search_with_fallback(extracted: dict) -> dict:
         ("full payload (role=MUST_HAVE)", dict(role_priority="MUST_HAVE")),
         ("drop skills filter", dict(role_priority="MUST_HAVE", include_skills=False)),
         ("role downgraded to CAN_HAVE", dict(role_priority="CAN_HAVE", include_skills=False)),
-        ("drop company filter", dict(role_priority="CAN_HAVE", include_skills=False, include_company=False)),
+        ("drop company filter", dict(role_priority="CAN_HAVE", include_skills=False,
+                                      include_company=False)),
+        ("drop keywords filter", dict(role_priority="CAN_HAVE", include_skills=False,
+                                       include_company=False, include_keywords=False)),
         ("role keywords only, no location", dict(role_priority="CAN_HAVE", include_skills=False,
-                                                   include_company=False, include_location=False)),
+                                                   include_company=False, include_keywords=False,
+                                                   include_location=False)),
     ]
 
     last_result = None
@@ -322,6 +388,7 @@ def run_pipeline_v2(jd_text: str) -> dict:
     print(json.dumps(extracted, indent=2))
 
     extracted = sanitize_extracted_keywords(extracted)
+    extracted = dedupe_across_fields(extracted)
     print("\nAfter sanitization:")
     print(json.dumps(extracted, indent=2))
 
