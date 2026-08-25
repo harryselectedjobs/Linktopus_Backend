@@ -52,39 +52,12 @@ def _format_company_filters(companies: list[dict] | None) -> list[dict]:
 
 
 async def search_linkedin_people(
-        account_id: str,
-        keyword: str,
-        limit: int = 1,
-        location: list[dict] | None = None,
-        seniority: dict | None = None,
-        past_company: list[dict] | None = None,
-        current_company: list[dict] | None = None,
-        role_priority: str = "CAN_HAVE",
-        skills_priority: str = "CAN_HAVE",
-        keyword_logic: str = "OR",
-        max_keyword_phrases: int = 2,
+    account_id: str,
+    roles: list[str],
+    companies: list[str],
+    locations: list[str],
+    limit: int = 100,
 ):
-    """
-    Search LinkedIn Recruiter people.
-
-    NOTE on keyword handling — the incoming `keyword` string is split
-    on " AND " into individual phrases, then distributed as follows
-    (default max_keyword_phrases=2):
-
-    - `role`: only the 2ND phrase. Unchanged from before.
-    - `keywords`: the FIRST `max_keyword_phrases` phrases, joined with
-      `keyword_logic`.
-    - `skills`: the NEXT `max_keyword_phrases` phrases after that —
-      a genuinely different slice from `keywords`. Falls back to the
-      same value as `keywords` if there aren't enough phrases left.
-    """
-
-    url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
-
-    params = {
-        "limit": limit,
-        "account_id": account_id,
-    }
 
     headers = {
         "X-API-KEY": UNIPILE_API_KEY,
@@ -92,92 +65,118 @@ async def search_linkedin_people(
         "content-type": "application/json",
     }
 
-    keyword_parts = re.split(r"\s+AND\s+", keyword.strip(), flags=re.IGNORECASE)
-    keyword_parts = [p.strip() for p in keyword_parts if p.strip()]
-
-    connector = " OR " if keyword_logic == "OR" else " AND "
-
-    keywords_slice = keyword_parts[:max_keyword_phrases]
-    effective_keyword = (
-        connector.join(keywords_slice) if keywords_slice else keyword.strip()
-    )
-
-    skills_slice = keyword_parts[max_keyword_phrases: max_keyword_phrases * 2]
-    effective_skills = (
-        connector.join(skills_slice) if skills_slice else effective_keyword
-    )
-
-    role_keyword = keyword_parts[1] if len(keyword_parts) >= 2 else effective_keyword
-
-    payload = {
-        "api": "recruiter",
-        "category": "people",
-        "keywords": effective_keyword,
-        "locale": "english",
-    }
-
-    payload["role"] = [
-        {
-            "is_selection": True,
-            "keywords": role_keyword,
-            "priority": role_priority,
-        }
-    ]
-
-    payload["skills"] = [
-        {
-            "keywords": effective_skills,
-            "priority": skills_priority,
-        }
-    ]
-
-    if location:
-        formatted_location = [{"id": str(loc["id"])} for loc in location if loc.get("id")]
-        if formatted_location:
-            payload["location"] = formatted_location
-
-    if seniority:
-        cleaned_seniority = {}
-        if seniority.get("include"):
-            cleaned_seniority["include"] = seniority["include"]
-        if seniority.get("exclude"):
-            cleaned_seniority["exclude"] = seniority["exclude"]
-        if cleaned_seniority:
-            payload["seniority"] = cleaned_seniority
-
-    formatted_past_company = _format_company_filters(past_company)
-    if formatted_past_company:
-        payload["past_company"] = formatted_past_company
-
-    formatted_current_company = _format_company_filters(current_company)
-    if formatted_current_company:
-        payload["current_company"] = formatted_current_company
-
     try:
-        print("payload")
-        print(payload)
-        print("payload")
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(url, params=params, headers=headers, json=payload)
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # ---------------------------------------------------------
+            # 1. Resolve location names -> LinkedIn/Unipile location IDs
+            #    ALWAYS use the first object returned by the API.
+            # ---------------------------------------------------------
+            location_filters = []
+
+            parameters_url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search/parameters"
+
+            for location in locations or []:
+                response = await client.get(
+                    parameters_url,
+                    params={
+                        "keywords": location,
+                        "service": "RECRUITER",
+                        "type": "LOCATION",
+                        "account_id": account_id,
+                    },
+                    headers=headers,
+                )
+                response.raise_for_status()
+
+                data = response.json()
+                items = data.get("items", [])
+
+                if not items:
+                    # No matching location found, so simply skip it.
+                    continue
+
+                # ALWAYS take the first object
+                location_id = items[0]["id"]
+
+                location_filters.append(
+                    {
+                        "id": location_id,
+                        "priority": "CAN_HAVE",
+                        "scope": "CURRENT",
+                    }
+                )
+
+            # ---------------------------------------------------------
+            # 2. Build company filters
+            #    All companies are alternatives -> CAN_HAVE
+            # ---------------------------------------------------------
+            company_filters = [
+                {
+                    "keywords": company,
+                    "priority": "CAN_HAVE",
+                    "scope": "CURRENT_OR_PAST",
+                }
+                for company in (companies or [])
+                if company and company.strip()
+            ]
+
+            # ---------------------------------------------------------
+            # 3. Build role filters
+            #    All roles are alternatives -> CAN_HAVE
+            # ---------------------------------------------------------
+            role_filters = [
+                {
+                    "keywords": role,
+                    "priority": "CAN_HAVE",
+                    "scope": "CURRENT_OR_PAST",
+                }
+                for role in (roles or [])
+                if role and role.strip()
+            ]
+
+            # ---------------------------------------------------------
+            # 4. Build Recruiter People payload
+            # ---------------------------------------------------------
+            payload = {
+                "api": "recruiter",
+                "category": "people",
+            }
+
+            if location_filters:
+                payload["location"] = location_filters
+
+            if company_filters:
+                payload["company"] = company_filters
+
+            if role_filters:
+                payload["role"] = role_filters
+
+            # ---------------------------------------------------------
+            # 5. Execute LinkedIn Recruiter search
+            # ---------------------------------------------------------
+            search_url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
+
+            response = await client.post(
+                search_url,
+                params={"account_id": account_id},
+                headers=headers,
+                json=payload,
+            )
             response.raise_for_status()
             return response.json()
 
     except httpx.ReadTimeout:
-        print("❌ Unipile search request timed out after 120s.")
+        print("❌ Unipile search request timed out.")
         return None
 
     except httpx.HTTPStatusError as e:
         print(f"❌ Unipile search HTTP error {e.response.status_code}: {e.response.text[:500]}")
-
-        # Full error body still written to disk for deep debugging,
-        # just not dumped into stdout/logs by default.
         try:
             error_body = e.response.json()
             with open("unipile_error.json", "w", encoding="utf-8") as f:
                 json.dump(error_body, f, indent=2)
         except Exception:
             pass
-
         return None
 
     except httpx.RequestError as e:
@@ -274,42 +273,25 @@ async def run_outreach_pipeline(
     account_id: str,
     project_id: str,
     project_name: str,
-    keyword: str,
+    roles: list[str],
+    companies: list[str],
+    locations: list[str],
     inmail_message: str,
     connection_message: str = None,
     limit: int = 100,
-    location: list[dict] | None = None,
-    seniority: dict | None = None,
-    past_company: list[dict] | None = None,
-    current_company: list[dict] | None = None,
     projects_account_id: str = "acc_01m09sdddhfetrdm9tzcbqncv1",
 ):
     """
-    1. Searches LinkedIn people (up to `limit`, optionally filtered by
-       `location` / `seniority`)
-    2. Saves all candidates to DynamoDB
-    3. Creates a Unipile recruiter project named `project_name` and adds
-       every saved candidate to that project's pipeline
-
-    NOTE: InMail sending, connection invites, and meeting record
-    creation are TEMPORARILY DISABLED. Re-enable by uncommenting STEP 3.
-
-    Unipile setup note — two separate Unipile accounts are in play here:
-    - `account_id`: the DSN/action account (search, addCandidateToPipeline)
-      on UNIPILE_BASE_URL / UNIPILE_API_KEY.
-    - `projects_account_id`: the account recruiter *projects* are created
-      under, on UNIPILE_PROJECTS_BASE_URL / UNIPILE_PROJECTS_API_KEY.
+    ... (docstring unchanged) ...
     """
 
     # ── STEP 1: Search LinkedIn ──────────────────────────────────────────
     search_result = await search_linkedin_people(
         account_id=account_id,
-        keyword=keyword,
+        roles=roles,
+        companies=companies,
+        locations=locations,
         limit=limit,
-        location=location,
-        seniority=seniority,
-        past_company=past_company,
-        current_company=current_company,
     )
 
     if not search_result:

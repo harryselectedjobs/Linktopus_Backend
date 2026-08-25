@@ -111,3 +111,62 @@ Return ONLY valid JSON in this exact format:
     response.raise_for_status()
     content = response.json()["choices"][0]["message"]["content"]
     return json.loads(content)
+
+### modification v2 ###
+
+import json
+import requests
+
+def extract_values(job_description: str):
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    system_prompt = """You are a job description parser. Given a job description, extract three fields and return ONLY valid JSON (no markdown, no commentary):
+
+{
+  "role": ["..."],
+  "companies": ["..."],
+  "location": ["..."]
+}
+
+Rules:
+
+1. "role": One or two job titles, not more than 2. These must be NORMALIZED, standardized titles as they commonly appear on LinkedIn — not a literal copy of whatever phrasing the JD uses internally.
+   - If the JD uses a vague, internal, or non-standard title (e.g. "Code Ninja", "Growth Hacker Extraordinaire", "Tech Lead - Platform Squad"), map it to the closest real, widely-used LinkedIn title (e.g. "Software Engineer", "Growth Marketing Manager", "Engineering Manager").
+   - If the JD title is already standard (e.g. "Backend Developer", "Data Scientist"), keep it as-is.
+   - Prefer titles you'd actually see used at scale on LinkedIn profiles/headlines over invented or overly specific hybrids.
+   - Never more than 2 titles.
+
+2. "companies": List every company explicitly mentioned in the JD (the hiring company, named clients, named competitors, etc.). Then ADD 3-5 additional companies similar in industry/domain to the mentioned ones.
+   Example: JD mentions "Celonis" -> add "Celonis" plus similar process-mining/enterprise-software companies (e.g. "UiPath", "Signavio", "ABBYY").
+   Example: JD mentions "Microsoft" and "Google" -> add both plus similar big-tech peers (e.g. "Amazon", "Meta", "Apple").
+
+3. "location": Identify the location(s) mentioned. If it's a specific city, list that city. If it's a broad region, expand it into the major cities that region typically refers to.
+   Example: "East Coast of the United States" ->
+   ["New York", "Boston", "Philadelphia", "Washington, D.C.", "Baltimore", "Atlanta", "Miami", "Charlotte", "Raleigh", "Richmond"]
+   Example: "Bay Area" -> ["San Francisco", "Oakland", "San Jose", "Palo Alto", "Mountain View"]
+   Example: "United States" -> ["New York", "San Francisco", "Seattle", "Austin", "Chicago", "Boston", "Los Angeles", "Denver", "Atlanta", "Washington, D.C."]
+
+Always return valid, parseable JSON matching the schema above. Do not wrap it in code fences."""
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": job_description}
+        ],
+        "temperature": 0.3
+    }
+
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+
+    content = response.json()["choices"][0]["message"]["content"]
+    return json.loads(content)
+
+response1 = extract_values("I want you to find me specifically people that are currently in the role of chief customer officer this can also be CCO on the job titles on LinkedIn I would like this person to be based on the East Coast of the United States of America So places like New York or Boston or Miami They can also be in central time zones United States so think places like Chicago or Austin Texas Also as well the company that I am looking to hire for is solo this role will be for the North America CCO the role will entail leadership of American pre-sales customer success professional services and renewals The types of company that Sal is hire from a settle organizations so companies like service now UI path ASAP Snowflake data bricks Adobe app dynamics slunk they also hire from companies like Payega systems Apion Pablo click software and a plan Mongo DB please take a look at the top 50 software companies that loan the higher from use those companies as the benchmark and then also find additional companies that would be relevant they also hire From consulting companies as well so companies like McKenzie and Company companies like Accenture companies like Jim Pat companies like Oliver Wyman so please also look at all of the consulting companies that salon is hiring and provide me profiles from those companies")
+print(response1)

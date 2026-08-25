@@ -48,3 +48,19 @@ async def extract_job_title_and_skills_api(request: JobDescriptionRequest):
             status_code=500,
             detail=str(e)
         )
+
+
+@router.post("/extract-values")
+async def extract_values_from_jd(request: JobDescriptionRequest):
+    try:
+        result = extract_job_title_and_skills(request.job_description)
+        return {
+            "success": True,
+            "data": result
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
