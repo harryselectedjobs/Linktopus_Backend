@@ -6,6 +6,8 @@ from fastapi import APIRouter, HTTPException
 from linkedIn_services.linkedin_recruiter_automation.automation_service import run_linkedin_job_and_outreach_campaign
 from linkedIn_services.linkedin_recruiter_automation.new_automation_service import search_linkedin_people, \
     run_outreach_pipeline
+from linkedIn_services.linkedin_recruiter_automation.unipile_apis import list_recruiter_projects, \
+    list_project_pipeline_candidates
 from models.linkedin_campaign import LinkedInCampaignRequest
 from repository.new_automation_pipeline import get_all_projects, get_project_details
 
@@ -107,3 +109,50 @@ async def get_project(project_id: str):
         raise  # preserve the 404 raised inside get_project_details
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch project: {str(e)}")
+
+
+
+# ── Project listing / details UNIPILE  ───────────────────────────────────────────────
+
+# ============================================================
+# UNIPILE - LIST RECRUITER PROJECTS
+# GET /automation/linkedin/recruiter/projects
+# ============================================================
+
+@router.get("/linkedin/recruiter/projects")
+async def get_linkedin_recruiter_projects():
+    try:
+        return await list_recruiter_projects()
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch LinkedIn Recruiter projects: {str(e)}",
+        )
+
+
+# ============================================================
+# UNIPILE - LIST PROJECT PIPELINE CANDIDATES
+# POST /automation/linkedin/recruiter/projects/{project_id}/pipeline
+# ============================================================
+
+@router.post(
+    "/linkedin/recruiter/projects/{project_id}/pipeline"
+)
+async def get_linkedin_project_pipeline_candidates(
+    project_id: str,
+):
+    try:
+        return await list_project_pipeline_candidates(
+            project_id
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Failed to fetch project pipeline candidates: "
+                f"{str(e)}"
+            ),
+        )
+

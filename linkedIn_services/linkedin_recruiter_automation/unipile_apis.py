@@ -183,3 +183,78 @@ async def book_event(payload: BookEventRequest) -> Response:
     calendar_id="AQMkADAwATM3ZmYAZS0xYzc0LWI5ZDctMDACLTAwCgBGAAADn5WgwTeI_kOEVuMg7XKvLAcAfDaEH8uxckCdl0Wmx6GJuAAAAgEGAAAAfDaEH8uxckCdl0Wmx6GJuAAAAhL6AAAA"
     account_id="g89rd7YaSy-oS9aviCL_zg"
     return _build_response(await _book_event_raw(calendar_id, account_id, payload))
+
+
+
+## uniupile project apis#
+
+import os
+import httpx
+
+
+UNIPILE_BASE_URL = "https://api.unipile.com"
+UNIPILE_ACCOUNT_ID = "acc_01m09sdddhfetrdm9tzcbqncv1"
+UNIPILE_API_KEY = "bKcyr7TB.app_01kznge4wxesmap4y2wk9qnqpv.PN4y1XB4VB1blVpdmZ+94MEM0llrJ5hGbV7MPgrjlr0="
+
+
+async def list_recruiter_projects():
+
+    url = (
+        f"{UNIPILE_BASE_URL}/v2/"
+        f"{UNIPILE_ACCOUNT_ID}"
+        f"/linkedin/recruiter/projects"
+    )
+
+    params = {
+        "status": "ACTIVE",
+        "sort_by": "NEWEST_TO_OLDEST",
+        "limit": 100,
+    }
+
+    headers = {
+        "X-API-KEY": UNIPILE_API_KEY,
+        "accept": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.get(
+            url,
+            params=params,
+            headers=headers,
+        )
+
+    response.raise_for_status()
+
+    return response.json()
+
+
+
+async def list_project_pipeline_candidates(project_id: str):
+    url = (
+        f"{UNIPILE_BASE_URL}/v2/"
+        f"{UNIPILE_ACCOUNT_ID}"
+        f"/linkedin/recruiter/projects/"
+        f"{project_id}/pipeline"
+    )
+
+    params = {
+        "limit": 100,
+    }
+
+    headers = {
+        "X-API-KEY": UNIPILE_API_KEY,
+        "accept": "application/json",
+        "content-type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            url,
+            params=params,
+            headers=headers,
+            json={},
+        )
+
+    response.raise_for_status()
+
+    return response.json()
