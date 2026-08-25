@@ -124,31 +124,51 @@ def extract_values(job_description: str):
         "Content-Type": "application/json"
     }
 
-    system_prompt = """You are a job description parser. Given a job description, extract three fields and return ONLY valid JSON (no markdown, no commentary):
+    system_prompt = """You are a job description parser and outreach message writer. Given a job description, extract fields and generate outreach content. Return ONLY valid JSON (no markdown, no commentary):
 
 {
   "role": ["..."],
   "companies": ["..."],
-  "location": ["..."]
+  "location": ["..."],
+  "inMailMessage": "...",
+  "connectionNote": "..."
 }
 
 Rules:
 
 1. "role": One or two job titles, not more than 2. These must be NORMALIZED, standardized titles as they commonly appear on LinkedIn — not a literal copy of whatever phrasing the JD uses internally.
-   - If the JD uses a vague, internal, or non-standard title (e.g. "Code Ninja", "Growth Hacker Extraordinaire", "Tech Lead - Platform Squad"), map it to the closest real, widely-used LinkedIn title (e.g. "Software Engineer", "Growth Marketing Manager", "Engineering Manager").
-   - If the JD title is already standard (e.g. "Backend Developer", "Data Scientist"), keep it as-is.
-   - Prefer titles you'd actually see used at scale on LinkedIn profiles/headlines over invented or overly specific hybrids.
+   - If the JD uses a vague, internal, or non-standard title, map it to the closest real, widely-used LinkedIn title.
+   - If the JD title is already standard, keep it as-is.
    - Never more than 2 titles.
 
-2. "companies": List every company explicitly mentioned in the JD (the hiring company, named clients, named competitors, etc.). Then ADD 3-5 additional companies similar in industry/domain to the mentioned ones.
-   Example: JD mentions "Celonis" -> add "Celonis" plus similar process-mining/enterprise-software companies (e.g. "UiPath", "Signavio", "ABBYY").
-   Example: JD mentions "Microsoft" and "Google" -> add both plus similar big-tech peers (e.g. "Amazon", "Meta", "Apple").
+2. "companies": List every company explicitly mentioned in the JD. Then ADD 3-5 additional companies similar in industry/domain to the mentioned ones.
 
-3. "location": Identify the location(s) mentioned. If it's a specific city, list that city. If it's a broad region, expand it into the major cities that region typically refers to.
-   Example: "East Coast of the United States" ->
-   ["New York", "Boston", "Philadelphia", "Washington, D.C.", "Baltimore", "Atlanta", "Miami", "Charlotte", "Raleigh", "Richmond"]
-   Example: "Bay Area" -> ["San Francisco", "Oakland", "San Jose", "Palo Alto", "Mountain View"]
-   Example: "United States" -> ["New York", "San Francisco", "Seattle", "Austin", "Chicago", "Boston", "Los Angeles", "Denver", "Atlanta", "Washington, D.C."]
+3. "location": Identify the location(s) mentioned and expand into specific cities.
+   - Specific city -> use as-is.
+   - Broad region (e.g. "East Coast") -> expand into that region's major cities.
+   - Whole country (e.g. "United States", "USA", "nationwide") -> expand into a national spread of major hub cities across multiple regions (West Coast, East Coast, Midwest, South).
+   - Remote explicitly stated -> ["Remote"].
+   - No location mentioned -> [] (empty array).
+
+4. "inMailMessage": A professional LinkedIn InMail message, 80-120 words, written to a candidate about this role based on the JD.
+   - Must begin exactly with: "Hi [Candidate's Name],"
+   - Use the exact placeholder "[Candidate's Name]" — never "[Name]", "[First Name]", "{name}", or any other variation.
+   - Briefly cover: the role, why the candidate might be a fit, and the company/opportunity, in a warm and professional recruiter tone.
+   - Must end with exactly this signature, on its own lines, with no text after it:
+
+Best regards,
+
+Harry Brown
+Owner @ Selected
+Direct Dial: 0203 865 6229
+Mobile: 07824 7011 54
+Address: Argent House, Hook Rise South, Tolworth, Surrey, KT6 7LD
+
+5. "connectionNote": A LinkedIn connection request note, maximum 300 characters (including spaces).
+   - If addressing the candidate by name, use the exact placeholder "[Candidate's Name]" (same rule as above — no variations).
+   - Short, warm, professional — a brief reason for connecting tied to the role, no signature.
+   - Do NOT include the signature block in the connection note.
+   - Must stay within 300 characters total.
 
 Always return valid, parseable JSON matching the schema above. Do not wrap it in code fences."""
 
@@ -166,4 +186,10 @@ Always return valid, parseable JSON matching the schema above. Do not wrap it in
     response.raise_for_status()
 
     content = response.json()["choices"][0]["message"]["content"]
-    return json.loads(content)
+    result = json.loads(content)
+
+    # Hard-enforce the connection note length cap, since the model can drift over the limit
+    if "connectionNote" in result and len(result["connectionNote"]) > 300:
+        result["connectionNote"] = result["connectionNote"][:300].rstrip()
+
+    return result
