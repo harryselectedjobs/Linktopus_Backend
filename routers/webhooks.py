@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from open_ai.helper_bot import extract_job_title_and_skills
+from open_ai.helper_bot import extract_job_title_and_skills, extract_values
 
 router = APIRouter(
     prefix="/webhook",
@@ -53,7 +53,7 @@ async def extract_job_title_and_skills_api(request: JobDescriptionRequest):
 @router.post("/extract-values")
 async def extract_values_from_jd(request: JobDescriptionRequest):
     try:
-        result = extract_job_title_and_skills(request.job_description)
+        result = extract_values(request.job_description)
         return {
             "success": True,
             "data": result
