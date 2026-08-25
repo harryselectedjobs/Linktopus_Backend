@@ -158,7 +158,7 @@ async def search_linkedin_people(
 
             response = await client.post(
                 search_url,
-                params={"account_id": account_id},
+                params={"account_id": account_id, "limit": limit},
                 headers=headers,
                 json=payload,
             )
