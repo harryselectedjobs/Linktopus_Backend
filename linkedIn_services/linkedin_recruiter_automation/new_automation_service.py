@@ -127,7 +127,7 @@ async def search_linkedin_people(
             role_filters = [
                 {
                     "keywords": role,
-                    "priority": "CAN_HAVE",
+                    "priority": "MUST_HAVE",
                     "scope": "CURRENT",
                 }
                 for role in (roles or [])
