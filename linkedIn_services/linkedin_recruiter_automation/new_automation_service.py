@@ -128,7 +128,7 @@ async def search_linkedin_people(
                 {
                     "keywords": role,
                     "priority": "CAN_HAVE",
-                    "scope": "CURRENT_OR_PAST",
+                    "scope": "CURRENT",
                 }
                 for role in (roles or [])
                 if role and role.strip()
