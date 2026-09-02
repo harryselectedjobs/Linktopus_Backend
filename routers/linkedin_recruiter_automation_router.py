@@ -4,8 +4,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 
 from linkedIn_services.linkedin_recruiter_automation.automation_service import run_linkedin_job_and_outreach_campaign
-from linkedIn_services.linkedin_recruiter_automation.new_automation_service import search_linkedin_people, \
-    run_outreach_pipeline
+from linkedIn_services.linkedin_recruiter_automation.new_automation_service import run_outreach_pipeline
 from linkedIn_services.linkedin_recruiter_automation.unipile_apis import list_recruiter_projects, \
     list_project_pipeline_candidates
 from models.linkedin_campaign import LinkedInCampaignRequest
