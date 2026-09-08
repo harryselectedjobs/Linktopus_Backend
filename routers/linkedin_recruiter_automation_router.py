@@ -66,6 +66,8 @@ async def trigger_outreach_pipeline(payload: OutreachPipelineRequest):
         )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()   # <-- prints the full stack trace to your server console/logs
         raise HTTPException(
             status_code=500,
             detail=f"Outreach pipeline failed: {str(e)}"

@@ -276,7 +276,7 @@ async def run_outreach_pipeline(
         print(f"⚠️ {len(ids) - len(set(ids))} duplicate candidate id(s) in search response: {dupes}")
 
     # ── STEP 2: Save candidates ──────────────────────────────────────────
-    save_candidates(project_id, candidates, project_name)
+    # save_candidates(project_id, candidates, project_name)
 
     # ── STEP 2b: Create Unipile recruiter project + sync pipeline ───────
     unipile_project_id = None
