@@ -13,7 +13,7 @@ load_dotenv()
 
 router = APIRouter()
 
-DEFAULT_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
+DEFAULT_ACCOUNT_ID = "Go4TXZgASryd_z5opPJ_Ow"
 
 
 def create_project_candidates_table(table_name: str = "jobPipelineTable"):

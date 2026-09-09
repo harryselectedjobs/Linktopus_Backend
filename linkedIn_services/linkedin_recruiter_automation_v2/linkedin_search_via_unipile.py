@@ -7,7 +7,7 @@ import requests
 # ---------------------------------------------------------------------------
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 UNIPILE_API_KEY = "VPUyiWkr.rbbNVdUZfHrvh5uOV3Jtx/eoQCGXXrG5O2p+0AqOQwQ="
-UNIPILE_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
+UNIPILE_ACCOUNT_ID = "Go4TXZgASryd_z5opPJ_Ow"
 UNIPILE_BASE_URL = os.environ.get("UNIPILE_BASE_URL", "https://api40.unipile.com:17060/api/v1")
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"

@@ -28,7 +28,7 @@ async def post_linkedin_campaign(request: LinkedInCampaignRequest):
     )
 
 
-DEFAULT_ACCOUNT_ID = "D8lUBYotRuGOlA7cOQ4egQ"
+DEFAULT_ACCOUNT_ID = "Go4TXZgASryd_z5opPJ_Ow"
 
 
 # ── Router ────────────────────────────────────────────────────────────────

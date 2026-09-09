@@ -28,7 +28,7 @@ async def post_to_selected_page(text: str, attachment_path: Path = ATTACHMENT_PA
     # Plain text fields go in `data=` (not `files=`), since they're not
     # actual file uploads — this matches --form field=value in curl.
     form_data = {
-        "account_id": "D8lUBYotRuGOlA7cOQ4egQ",
+        "account_id": "Go4TXZgASryd_z5opPJ_Ow",
         "text": text,
         "as_organization": "18055530",
     }

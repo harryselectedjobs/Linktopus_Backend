@@ -246,7 +246,7 @@ async def run_outreach_pipeline(
     inmail_message: str,
     connection_message: str = None,
     limit: int = 100,
-    projects_account_id: str = "acc_01m09sdddhfetrdm9tzcbqncv1",
+    projects_account_id: str = "acc_01m23cadhmexwtq4qvd6x3tj53",
 ):
     """
     `limit` is the number of TITLE-MATCHING candidates to add to the pipeline.
