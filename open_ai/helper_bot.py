@@ -8,6 +8,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 
+
 def extract_job_title_and_skills(job_description: str):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
