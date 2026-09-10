@@ -17,27 +17,20 @@ def generate_title_variants(
 ) -> list[str]:
     """
     Ask OpenAI for realistic LinkedIn title variants for the role described.
-
-    Returns a flat list of strings, e.g.:
-        [
-            "Chief Customer Officer",
-            "CCO",
-            "Chief Customer Experience Officer",
-            "Global Chief Customer Officer",
-            "Group Chief Customer Officer"
-        ]
+    Called ONCE PER ROLE (not per candidate) — see search_matching_candidates.
     """
-
     system_prompt = (
         "You are a recruiting assistant. Given a job description, output the realistic "
         "range of job titles a matching candidate might have on LinkedIn TODAY, in their "
         "*current* role. Include:\n"
         "- The canonical title itself\n"
-        "- Common abbreviations (e.g. CCO, CTO)\n"
+        "- Common abbreviations (e.g. CCO, CTO, VP, SVP, EVP)\n"
         "- Common scope/seniority prefixes actually seen on LinkedIn "
         "(e.g. 'Global', 'Group', 'EVP + ', 'Interim')\n"
         "- Close synonymous titles used interchangeably in industry for the same function "
-        "(e.g. 'Chief Customer Experience Officer' for 'Chief Customer Officer')\n\n"
+        "(e.g. 'Chief Customer Experience Officer' for 'Chief Customer Officer')\n"
+        "- Common punctuation/word-order variants actually seen on LinkedIn "
+        "(e.g. 'VP, Sales' vs 'VP of Sales' vs 'Vice President - Sales')\n\n"
         "Do NOT include titles for a clearly lower seniority or a different function "
         "(e.g. do not include 'VP Customer Success' or 'Customer Success Manager' for a "
         "'Chief Customer Officer' search).\n\n"
@@ -45,53 +38,33 @@ def generate_title_variants(
     )
 
     url = "https://api.openai.com/v1/chat/completions"
-
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
     }
-
     payload = {
         "model": model,
         "messages": [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": job_description,
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": job_description},
         ],
-        "response_format": {
-            "type": "json_object"
-        },
+        "response_format": {"type": "json_object"},
         "temperature": 0,
     }
 
-    response = requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=60,
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    content = data["choices"][0]["message"]["content"]
-
-    result = json.loads(content)
-
-    titles = result.get("titles", [])
-
-    return [
-        title.strip()
-        for title in titles
-        if isinstance(title, str) and title.strip()
-    ]
-
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        result = json.loads(content)
+        titles = result.get("titles", [])
+        return [t.strip() for t in titles if isinstance(t, str) and t.strip()]
+    except Exception as e:
+        # Don't let a flaky OpenAI call crash the whole search — fall back to
+        # just the literal role string so matching still has something to work with.
+        print(f"⚠️ generate_title_variants failed for '{job_description}': {type(e).__name__}: {e}")
+        return [job_description]
 
 # ---------------------------------------------------------------------------
 # 2. Deterministic matcher: candidate JSON  vs  a list of acceptable titles

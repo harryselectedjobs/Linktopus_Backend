@@ -5,7 +5,7 @@ import re
 
 from linkedIn_services.linkedin_recruiter_automation.unipile_apis import _invite_linkedin_user_raw, \
     _create_linkedin_chat_raw, _get_linkedin_user_profile_raw, _safe_json
-from linkedIn_services.linkedin_recruiter_automation.filter_candidates import is_matching_candidate
+from linkedIn_services.linkedin_recruiter_automation.filter_candidates import generate_title_variants,matches_any_title ,_get_candidate_titles
 from models.linkedin_chat import LinkedInChatRequest
 from models.linkedin_user_action import LinkedInInviteRequest
 from repository.new_automation_pipeline import save_candidates, get_top_candidates, mark_outreach_sent
@@ -42,8 +42,65 @@ def _headers() -> dict:
     }
 
 
+async def _resolve_role_filters(client: httpx.AsyncClient, account_id: str, roles: list[str]) -> list[dict]:
+    """
+    Resolve job title strings -> LinkedIn/Unipile JOB_TITLE taxonomy IDs.
+
+    Mirrors the Recruiter UI exactly: ONE title per role input (not a
+    manually-expanded family of variants), priority=CAN_HAVE, and
+    scope=CURRENT_OR_PAST (matching the "Current or Past" toggle shown
+    in the UI screenshot — NOT "Current" only).
+
+    is_selection is read from the nested `additional_data` field in the
+    API response, NOT the top level — that was the earlier bug.
+    """
+    role_filters = []
+    parameters_url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search/parameters"
+
+    for role in roles or []:
+        if not role or not role.strip():
+            continue
+
+        response = await client.get(
+            parameters_url,
+            params={
+                "keywords": role,
+                "service": "RECRUITER",
+                "type": "JOB_TITLE",
+                "account_id": account_id,
+            },
+            headers=_headers(),
+        )
+        response.raise_for_status()
+
+        items = response.json().get("items", [])
+        if not items:
+            print(f"⚠️ no JOB_TITLE match found for '{role}' — skipping")
+            continue
+
+        print(f"🔎 JOB_TITLE matches for '{role}':")
+        for it in items:
+            is_sel = it.get("additional_data", {}).get("is_selection")
+            print(f"    id={it.get('id')}  title={it.get('title')}  is_selection={is_sel}")
+
+        # Use ONLY the first/top match — this is what the UI's single
+        # text box resolves to when you type the title and it autocompletes.
+        chosen = items[0]
+        is_selection = chosen.get("additional_data", {}).get("is_selection", False)
+
+        print(f"    -> using id={chosen['id']} (title={chosen.get('title')}, is_selection={is_selection})")
+
+        role_filters.append({
+            "id": chosen["id"],
+            "is_selection": is_selection,
+            "priority": "CAN_HAVE",         # matches UI: "Can have"
+            "scope": "CURRENT_OR_PAST",     # matches UI: "Current or Past" — was "CURRENT", this was wrong
+        })
+
+    return role_filters
+
 async def _resolve_location_filters(client: httpx.AsyncClient, account_id: str, locations: list[str]) -> list[dict]:
-    """Resolve location names -> LinkedIn/Unipile location IDs. ALWAYS uses the first match."""
+    """Resolve location names -> LinkedIn/Unipile location IDs."""
     location_filters = []
     parameters_url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search/parameters"
 
@@ -62,26 +119,28 @@ async def _resolve_location_filters(client: httpx.AsyncClient, account_id: str, 
 
         items = response.json().get("items", [])
         if not items:
-            continue  # no matching location found, skip it
+            print(f"⚠️ no LOCATION match found for '{location}'")
+            continue
+
+        # DEBUG: show every candidate match, not just the one we pick
+        print(f"🔎 LOCATION matches for '{location}':")
+        for it in items:
+            print(f"    id={it.get('id')}  title={it.get('title')}")
+
+        chosen = items[0]
+        print(f"    -> using id={chosen['id']} (title={chosen.get('title')})")
 
         location_filters.append(
-            {"id": items[0]["id"], "priority": "CAN_HAVE", "scope": "CURRENT"}
+            {"id": chosen["id"], "priority": "CAN_HAVE", "scope": "CURRENT"}
         )
 
     return location_filters
 
-
-def _build_search_payload(roles: list[str], companies: list[str], location_filters: list[dict]) -> dict:
+def _build_search_payload(role_filters: list[dict], companies: list[str], location_filters: list[dict]) -> dict:
     company_filters = [
         {"keywords": company, "priority": "CAN_HAVE", "scope": "CURRENT_OR_PAST"}
         for company in (companies or [])
         if company and company.strip()
-    ]
-
-    role_filters = [
-        {"keywords": role, "priority": "MUST_HAVE", "scope": "CURRENT"}
-        for role in (roles or [])
-        if role and role.strip()
     ]
 
     payload = {"api": "recruiter", "category": "people"}
@@ -90,7 +149,7 @@ def _build_search_payload(roles: list[str], companies: list[str], location_filte
     if company_filters:
         payload["company"] = company_filters
     if role_filters:
-        payload["role"] = role_filters
+        payload["role"] = role_filters  # already {"id": ..., "priority": ..., "scope": ...} dicts
 
     return payload
 
@@ -98,8 +157,7 @@ def _build_search_payload(roles: list[str], companies: list[str], location_filte
 async def _iter_search_pages(client: httpx.AsyncClient, account_id: str, payload: dict, page_size: int = 100):
     """
     Async generator yielding raw candidate dicts across ALL pages, following
-    the `cursor` field. Per Unipile's docs: if the cursor is null, there is
-    no more results — so that's the loop's stop condition.
+    the `cursor` field. If the cursor is null, there are no more results.
     """
     search_url = f"{UNIPILE_BASE_URL}/api/v1/linkedin/search"
     cursor = None
@@ -132,29 +190,45 @@ async def search_matching_candidates(
 ) -> list[dict]:
     """
     Searches LinkedIn (paginating via cursor as needed) and returns up to
-    `target_count` candidates whose CURRENT title actually matches one of
-    `roles` per `is_matching_candidate` — not just raw search hits. Stops
-    pulling further pages as soon as `target_count` matches are found, or
-    when the search runs out of pages.
+    `target_count` candidates. Trusts Unipile/LinkedIn's own server-side
+    role filter (via resolved JOB_TITLE id + is_selection) instead of
+    re-filtering locally with a title regex — the server-side taxonomy
+    match is more accurate than a literal-text/synonym check ever was.
     """
     matched: list[dict] = []
+    raw_count = 0
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             location_filters = await _resolve_location_filters(client, account_id, locations)
-            payload = _build_search_payload(roles, companies, location_filters)
+            role_filters = await _resolve_role_filters(client, account_id, roles)
+            company_filters = [
+                {"keywords": company, "priority": "CAN_HAVE", "scope": "CURRENT_OR_PAST"}
+                for company in (companies or [])
+                if company and company.strip()
+            ]
+
+            payload = {"api": "recruiter", "category": "people"}
+            if location_filters:
+                payload["location"] = location_filters
+            if company_filters:
+                payload["company"] = company_filters
+            if role_filters:
+                payload["role"] = role_filters
 
             print("payload")
             print(payload)
             print("payload")
 
             async for candidate in _iter_search_pages(client, account_id, payload, page_size):
-                is_match = any(is_matching_candidate(candidate, role) for role in (roles or []))
-                if is_match:
-                    matched.append(candidate)
+                raw_count += 1
+                matched.append(candidate)  # trust server-side role match — no local title regex
 
                 if len(matched) >= target_count:
                     break
+
+            print(f"RAW candidates returned by Unipile: {raw_count}")
+            print(f"MATCHED (trusting server-side role filter): {len(matched)}")
 
     except httpx.ReadTimeout:
         print("❌ Unipile search request timed out.")
@@ -173,6 +247,10 @@ async def search_matching_candidates(
     except httpx.RequestError as e:
         print(f"❌ Unipile search request error: {e}")
         return matched
+
+    except Exception as e:
+        print(f"❌ Unexpected error after {len(matched)} matched (raw so far: {raw_count}): {e}")
+        raise
 
     return matched
 

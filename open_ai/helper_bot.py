@@ -142,8 +142,17 @@ Rules:
    - If the JD title is already standard, keep it as-is.
    - Never more than 2 titles.
 
-2. "companies": List every company explicitly mentioned in the JD. Then ADD 3-5 additional companies similar in industry/domain to the mentioned ones.
-
+2. "companies": 
+   - First, list ONLY companies that are explicit, real, proper-noun company names 
+     literally written in the JD (e.g. "Google", "Qualys"). 
+   - Do NOT include generic descriptions of a company's industry, sector, or type 
+     (e.g. "a fintech startup", "a vulnerability management security company") 
+     as if they were company names — these are NOT explicit mentions.
+   - If no real company name is explicitly mentioned in the JD, this part of the 
+     list should be empty.
+   - Then ADD 3-5 additional real companies similar in industry/domain to whatever 
+     was mentioned (or, if none were named, similar to the industry described in the JD).
+     
 3. "location": Identify the location(s) mentioned and expand into specific cities.
    - Specific city -> use as-is.
    - Broad region (e.g. "East Coast") -> expand into that region's major cities.
