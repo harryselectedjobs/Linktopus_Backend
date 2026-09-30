@@ -209,6 +209,5 @@ def search_and_add_to_pipeline(req: SearchPipelineRequest):
         daemon=True,
     )
     t.start()
-    t.join(timeout=240)  # wait 4 minutes, under Apache's 300s limit
 
     return {"message": "Pipeline is running in the background. Check LinkedIn Recruiter in a few minutes."}
