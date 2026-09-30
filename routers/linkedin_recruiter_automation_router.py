@@ -4,9 +4,11 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 
 from linkedIn_services.linkedin_recruiter_automation.automation_service import run_linkedin_job_and_outreach_campaign
+from linkedIn_services.linkedin_recruiter_automation.automation_service_v2 import main_function
 from linkedIn_services.linkedin_recruiter_automation.new_automation_service import run_outreach_pipeline
 from linkedIn_services.linkedin_recruiter_automation.unipile_apis import list_recruiter_projects, \
     list_project_pipeline_candidates
+from linkedIn_services.linkedin_search_service_new.new_search_unipile import run_search_and_pipeline
 from models.linkedin_campaign import LinkedInCampaignRequest
 from repository.new_automation_pipeline import get_all_projects, get_project_details
 
@@ -157,3 +159,45 @@ async def get_linkedin_project_pipeline_candidates(
             ),
         )
 
+
+
+## final
+
+class CandidateSourcingRequest(BaseModel):
+    job_description: str = Field(..., description="Full job description text to source candidates against")
+    project_name: str = Field(..., description="Name to give the Unipile recruiter project created for this role")
+    hiringFor: str = Field(..., description="Who/what this role is being hired for (e.g. client or team name)")
+
+
+@router.post("/candidate-sourcing")
+def source_and_pipeline_candidates(request: CandidateSourcingRequest):
+    try:
+        final_result, thread = main_function(
+            request.job_description,
+            request.project_name,
+            request.hiringFor,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Candidate sourcing pipeline failed: {e}")
+
+    if final_result is None:
+        raise HTTPException(status_code=502, detail="Candidate evaluation failed during sourcing pipeline")
+
+    return {
+        "sourcing_id": str(uuid.uuid4()),
+        "project_name": request.project_name,
+        "hiring_for": request.hiringFor,
+        "candidate_count": len(final_result),
+        "candidates": final_result,
+        "pipeline_add_running": thread is not None,
+    }
+
+
+
+class SearchPipelineRequest(BaseModel):
+    job_description: str = Field(..., min_length=50, description="Full job description text")
+    project_name: str = Field(..., min_length=1, description="Name of the Unipile recruiter project to create")
+
+@router.post("/search-and-add-to-pipeline-sync")
+def search_and_add_sync(req: SearchPipelineRequest):
+    return run_search_and_pipeline(req.job_description, req.project_name)

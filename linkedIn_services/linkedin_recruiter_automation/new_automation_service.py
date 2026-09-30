@@ -94,7 +94,7 @@ async def _resolve_role_filters(client: httpx.AsyncClient, account_id: str, role
             "id": chosen["id"],
             "is_selection": is_selection,
             "priority": "CAN_HAVE",         # matches UI: "Can have"
-            "scope": "CURRENT_OR_PAST",     # matches UI: "Current or Past" — was "CURRENT", this was wrong
+            "scope": "CURRENT",
         })
 
     return role_filters
@@ -203,7 +203,7 @@ async def search_matching_candidates(
             location_filters = await _resolve_location_filters(client, account_id, locations)
             role_filters = await _resolve_role_filters(client, account_id, roles)
             company_filters = [
-                {"keywords": company, "priority": "CAN_HAVE", "scope": "CURRENT_OR_PAST"}
+                {"keywords": company, "priority": "CAN_HAVE", "scope": "CURRENT"}
                 for company in (companies or [])
                 if company and company.strip()
             ]

@@ -1,0 +1,191 @@
+{
+  "api": "recruiter",
+  "category": "people",
+  "role": [
+    {
+      "is_selection": true,
+      "keywords": "Senior Vice President OR Chief Customer Officer OR VP of Customer Success OR Head of Pre-Sales",
+      "priority": "MUST_HAVE",
+      "scope": "CURRENT"
+    }
+  ],
+  "location": [
+    {
+      "id": "105080838",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "102571732",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "90000070",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "102490898",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "104361728",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "103112676",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "90000014",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "107181180",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "104396020",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "105547215",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "90000064",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "104472865",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "106095485",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "90000682",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    },
+    {
+      "id": "105788178",
+      "priority": "CAN_HAVE",
+      "scope": "CURRENT"
+    }
+  ],
+  "current_company": [
+    {
+      "id": "3185",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "418095",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "29352",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "68529",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "1480",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "1028",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "1035",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "1115",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "22688",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "1377014",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "2491343",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "1876917",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "38373",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "17719",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "19022",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "60868",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "1612748",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "400528",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "807257",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "2525169",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "75860751",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "71812",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "74076386",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "314350",
+      "priority": "CAN_HAVE"
+    },
+    {
+      "id": "206993",
+      "priority": "CAN_HAVE"
+    }
+  ]
+}
