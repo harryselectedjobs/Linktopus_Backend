@@ -2,6 +2,8 @@ from fastapi import APIRouter
 import uuid
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
+import threading
+
 
 from linkedIn_services.linkedin_recruiter_automation.automation_service import run_linkedin_job_and_outreach_campaign
 from linkedIn_services.linkedin_recruiter_automation.automation_service_v2 import main_function
@@ -198,6 +200,15 @@ class SearchPipelineRequest(BaseModel):
     job_description: str = Field(..., min_length=50, description="Full job description text")
     project_name: str = Field(..., min_length=1, description="Name of the Unipile recruiter project to create")
 
-@router.post("/search-and-add-to-pipeline-sync")
-def search_and_add_sync(req: SearchPipelineRequest):
-    return run_search_and_pipeline(req.job_description, req.project_name)
+
+@router.post("/search-and-add-to-pipeline")
+def search_and_add_to_pipeline(req: SearchPipelineRequest):
+    t = threading.Thread(
+        target=run_search_and_pipeline,
+        args=(req.job_description, req.project_name),
+        daemon=True,
+    )
+    t.start()
+    t.join(timeout=240)  # wait 4 minutes, under Apache's 300s limit
+
+    return {"message": "Pipeline is running in the background. Check LinkedIn Recruiter in a few minutes."}
